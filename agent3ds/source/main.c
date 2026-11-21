@@ -941,6 +941,7 @@ static void draw_bottom(State st, int nacts, const Act *acts, int pl, int pcur, 
     snprintf(d, sizeof d, "TLS verificado: %s   sin verificar: %s", a1, b1);
     text_at(d, 160, 216, 0.4f, C_MUTED, C2D_AlignCenter);
   }
+}
 
 /* ------------------------------------------------------------------ */
 /* Hilo de red                                                         */
