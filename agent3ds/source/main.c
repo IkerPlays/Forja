@@ -69,15 +69,6 @@ static void set_state(State s, const char *msg) {
   if (msg) snprintf(g_status, sizeof g_status, "%s", msg);
   LightLock_Unlock(&g_lock);
 }
-static void set_status(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
-static void set_status(const char *fmt, ...) {
-  char tmp[200];
-  va_list ap; va_start(ap, fmt); vsnprintf(tmp, sizeof tmp, fmt, ap); va_end(ap);
-  LightLock_Lock(&g_lock);
-  snprintf(g_status, sizeof g_status, "%s", tmp);
-  if (g_state != ST_PAIR && g_state != ST_RUN) g_state = ST_BOOT;
-  LightLock_Unlock(&g_lock);
-}
 static void set_error(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 static void set_error(const char *fmt, ...) {
   char tmp[200];
@@ -685,8 +676,8 @@ static void bg(float w, float h) { C2D_DrawRectangle(0, 0, 0, w, h, C_BG1, C_BG1
 static void logo(float cx, float cy, float s) {
   C2D_DrawTriangle(cx, cy - 15 * s, C_AMBER, cx - 10 * s, cy + 7 * s, C_ORANGE, cx + 10 * s, cy + 7 * s, C_ORANGE, 0);
   C2D_DrawTriangle(cx, cy - 4 * s, CLR(0xff, 0xe0, 0x9a), cx - 5 * s, cy + 7 * s, C_AMBER, cx + 5 * s, cy + 7 * s, C_AMBER, 0);
-  C2D_DrawRectSolid(cx - 13 * s, cy + 9 * s, 26 * s, 5 * s, C_ORANGE);
-  C2D_DrawRectSolid(cx - 9 * s, cy + 14 * s, 18 * s, 3 * s, CLR(0xc9, 0x58, 0x1c));
+  C2D_DrawRectSolid(cx - 13 * s, cy + 9 * s, 0, 26 * s, 5 * s, C_ORANGE);
+  C2D_DrawRectSolid(cx - 9 * s, cy + 14 * s, 0, 18 * s, 3 * s, CLR(0xc9, 0x58, 0x1c));
 }
 
 static void spinner(float cx, float cy, float r, unsigned tick, u32 base_r, u32 base_g, u32 base_b) {
