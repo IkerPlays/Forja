@@ -1,7 +1,7 @@
 # Forja3DS
 
 App homebrew (`.3dsx`) que conecta tu Nintendo 3DS con Forja **por internet**, sin PC ni bridge.
-Se descarga compilada desde GitHub → Actions → *Build Forja3DS* → artefacto **Forja3DS**.
+Se descarga compilada desde la propia web (dispositivo → *Instrucciones de la 3DS*) o desde GitHub → Releases → *forja3ds-latest*.
 
 ## Instalar
 1. Copia `Forja3DS.3dsx` a la SD: `/3ds/Forja3DS.3dsx`.
