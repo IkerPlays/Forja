@@ -171,7 +171,7 @@ function AgentHelp({ device, onClose }: { device: Device; onClose: () => void })
           No necesitas ordenador ni estar en la misma red que la tablet.
         </p>
         <ol className="steps">
-          <li>Descarga <a className="btn sm" href="/downloads/Forja3DS.3dsx" download><Download size={14} /> Forja3DS.3dsx</a> y cópiala a la SD en <code>/3ds/</code> (con FTP, lector de tarjetas o FBI).</li>
+          <li>Descarga <a className="btn sm" href="/downloads/Forja3DS.cia" download><Download size={14} /> Forja3DS.cia</a> e instálala con <strong>FBI</strong> (queda en el menú HOME), o bien <a className="btn sm" href="/downloads/Forja3DS.3dsx" download><Download size={14} /> Forja3DS.3dsx</a> y cópiala a <code>/3ds/</code> en la SD para abrirla desde el Homebrew Launcher.</li>
           <li>Descarga este <code>config.txt</code>, <strong>escribe la contraseña</strong> y cópialo a la SD en <code>/3ds/forja/config.txt</code>. <button className="btn sm" onClick={download}><Download size={14} /> config.txt</button></li>
           <li>En la 3DS abre <strong>Forja3DS</strong> desde el Homebrew Launcher. Cuando aparezca «Conectado», el punto de aquí se pone verde.</li>
         </ol>

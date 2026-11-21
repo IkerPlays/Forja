@@ -4,7 +4,7 @@ App homebrew (`.3dsx`) que conecta tu Nintendo 3DS con Forja **por internet**, s
 Se descarga compilada desde la propia web (dispositivo → *Instrucciones de la 3DS*) o desde GitHub → Releases → *forja3ds-latest*.
 
 ## Instalar
-1. Copia `Forja3DS.3dsx` a la SD: `/3ds/Forja3DS.3dsx`.
+1. **Homebrew Launcher**: copia `Forja3DS.3dsx` a `/3ds/Forja3DS.3dsx`. **O bien** instala `Forja3DS.cia` con FBI (aparece en el menú HOME).
 2. Crea `/3ds/forja/config.txt` (la web te lo genera: dispositivo → *Instrucciones de la 3DS*):
    ```
    url=https://xxxx.supabase.co
@@ -21,7 +21,7 @@ Inicia sesión, manda un latido cada 15 s y cada 2 s pide órdenes: listar carpe
 (en trozos de 1 MB, hasta 50 MB), crear carpetas, renombrar y borrar. Todo sobre la tarjeta SD (`sdmc:/`).
 
 ## Compilar a mano
-Con [devkitPro](https://devkitpro.org) (devkitARM + libctru): `make`.
+Con [devkitPro](https://devkitpro.org) (devkitARM + libctru): `make` (.3dsx) y `make cia` (necesita `makerom` y `bannertool`; la CI los compila).
 
 ## Notas
 - La verificación del certificado TLS está desactivada (la 3DS no trae las CA actuales). Usa una cuenta propia de la consola.

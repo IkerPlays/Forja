@@ -11,10 +11,10 @@ Un navegador no puede abrir FTP ni UDP, ni llamar a una IP de tu WiFi (HTTPS lo 
 ## 3DS → Forja3DS
 
 1. En Forja: **3DS → Añadir**. En el dispositivo pulsa *¿Cómo conecto la 3DS?*.
-2. Descarga `Forja3DS.3dsx` y cópiala a la SD en `/3ds/`.
+2. Descarga `Forja3DS.cia` (instálala con FBI) o `Forja3DS.3dsx` (cópiala a `/3ds/` en la SD).
 3. Descarga el `config.txt` que genera la web, **escribe la contraseña** y cópialo a `/3ds/forja/config.txt`.
    * La cuenta debe ser miembro del estudio. Lo recomendable es crear una **cuenta solo para la consola** (Equipo → Añadir; regístrala en la web con ese correo) para no dejar tu contraseña personal en la SD.
-4. Abre **Forja3DS** desde el Homebrew Launcher. Cuando ponga *Conectado*, el punto del dispositivo se pone verde y ya puedes explorar, subir, bajar, renombrar y borrar archivos de la SD.
+4. Abre **Forja3DS** (menú HOME si instalaste el .cia, o Homebrew Launcher). Cuando ponga *Conectado*, el punto del dispositivo se pone verde y ya puedes explorar, subir, bajar, renombrar y borrar archivos de la SD.
 
 Detalles: [`agent3ds/README.md`](../agent3ds/README.md). Se compila solo en GitHub Actions (*Build Forja3DS*) y se publica en Releases (`forja3ds-latest`).
 
