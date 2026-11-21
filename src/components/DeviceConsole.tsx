@@ -7,6 +7,7 @@ import { Link as RouterLink } from 'react-router-dom'
 import { isDesktop } from '../lib/native'
 import { useHostState } from './DesktopHostMount'
 import { CommandClient, Link } from '../lib/devices'
+import { openP2P, type P2PClient } from '../lib/p2p'
 import type { Device, FileEntry } from '../lib/types'
 import type { PadState } from '../lib/pad'
 import FileBrowser from './FileBrowser'
@@ -36,18 +37,28 @@ export default function DeviceConsole({ device, onChanged, onDeleted, startPath,
   useEffect(() => () => client.dispose(), [client])
 
   // Canal en tiempo real (pantalla + mando). Se abre solo en pestañas que lo usan.
-  const needsLink = tab === 'play' || tab === 'screen'
+  const needsLink = tab === 'play' || tab === 'screen' || (tab === 'files' && !is3ds)
   const [link, setLink] = useState<Link | null>(null)
   const [linkErr, setLinkErr] = useState<string | null>(null)
   const [hasBridge, setHasBridge] = useState(false)
+  const [filesHost, setFilesHost] = useState<string | null>(null)
+  const [p2p, setP2p] = useState<P2PClient | null>(null)
   useEffect(() => {
     if (!needsLink) return
     const l = new Link(device.id, 'viewer')
     setLinkErr(null)
-    const off = l.onPresence(peers => setHasBridge(peers.some(p => p.roles.includes('bridge'))))
+    const off = l.onPresence(peers => { setHasBridge(peers.some(p => p.roles.includes('bridge'))); setFilesHost(peers.find(p => p.roles.includes('files'))?.id ?? null) })
     l.ready.then(() => setLink(l)).catch(e => setLinkErr(errMsg(e)))
-    return () => { off(); l.close(); setLink(null); setHasBridge(false) }
+    return () => { off(); l.close(); setLink(null); setHasBridge(false); setFilesHost(null) }
   }, [device.id, needsLink])
+
+  // Archivos directos con el PC (WebRTC): sin subir nada al servidor
+  useEffect(() => {
+    if (!link || !filesHost || tab !== 'files') return
+    let alive = true, client: P2PClient | null = null
+    openP2P(link, filesHost).then(c => { if (!alive) { c.close(); return } client = c; c.onClose = () => setP2p(null); setP2p(c) }).catch(() => { if (alive) setP2p(null) })
+    return () => { alive = false; client?.close(); setP2p(null) }
+  }, [link, filesHost, tab])
 
   // Mando → bridge (a ~60 Hz como máximo)
   const lastSent = useRef(0)
@@ -128,7 +139,7 @@ export default function DeviceConsole({ device, onChanged, onDeleted, startPath,
             )}
             {!is3ds && !isDesktop && <PcFolderPanel deviceId={device.id} />}
             {is3ds && !online && <OfflineHint onHelp={() => setHelp(true)} />}
-            {(is3ds || online || isLocal) && <FileBrowser device={device} client={client} startPath={startPath} dirActions={dirActions} />}
+            {(is3ds || online || isLocal || !!p2p) && <FileBrowser device={device} client={client} p2p={p2p} startPath={startPath} dirActions={dirActions} />}
           </>
         )}
         {tab === 'setup' && (

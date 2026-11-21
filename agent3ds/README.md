@@ -1,7 +1,7 @@
 # Forja3DS
 
 App homebrew (`.3dsx` / `.cia`) que conecta tu Nintendo 3DS con Forja **por internet**, sin PC y sin escribir contraseñas.
-Descárgala desde la web (3DS → dispositivo → *Instalar / vincular la 3DS*) o desde GitHub → Releases → *forja3ds-latest*.
+Descárgala desde la web (3DS → dispositivo → *Instalar / vincular la 3DS*) o desde GitHub → Releases (última versión vX.Y.Z).
 
 ## Usar
 1. Instala `Forja3DS.cia` con FBI (queda en el menú HOME) **o** copia `Forja3DS.3dsx` a `/3ds/` en la SD.

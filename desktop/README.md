@@ -1,7 +1,7 @@
 # Forja para escritorio
 
 Electron: abre la web de Forja y añade lo que un navegador no puede hacer — archivos reales del PC, pantalla, ratón/teclado, y puente local para la 3DS.
-Instaladores en GitHub → Releases → `desktop-latest` (Windows `.exe`, Linux `.AppImage`).
+Instaladores en GitHub → Releases → última versión (`vX.Y.Z`) (Windows `.exe`, Linux `.AppImage`).
 
 ```bash
 npm install

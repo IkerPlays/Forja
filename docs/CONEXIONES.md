@@ -10,7 +10,7 @@ Forja controla tres tipos de cosas. La web también lo explica con estado en viv
 
 ## 1 · PC → app de escritorio
 
-1. Descarga el instalador desde **GitHub → Releases → *desktop-latest***: `Forja-Setup-….exe` (Windows) o `Forja-….AppImage` (Linux). Windows avisará de «editor desconocido» → *Más información → Ejecutar de todas formas* (la app no está firmada).
+1. Descarga el instalador desde **GitHub → Releases → la última versión (vX.Y.Z)**: `Forja-Setup-….exe` (Windows) o `Forja-….AppImage` (Linux). Windows avisará de «editor desconocido» → *Más información → Ejecutar de todas formas* (la app no está firmada).
 2. Ábrela e **inicia sesión** con tu cuenta de Forja. El PC se registra solo y aparece en verde en *Juegos → Mi PC*.
 3. En **Este equipo** eliges qué compartes: carpetas concretas o **todo el equipo** (con aviso), si se puede ver la pantalla, si se puede usar ratón/teclado/táctil, y si arranca con el PC.
 4. Cierra la ventana: sigue en la **bandeja del sistema** para que el PC esté siempre disponible. Para salir: icono de la bandeja → *Salir*.

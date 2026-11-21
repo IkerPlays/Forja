@@ -19,7 +19,8 @@ export interface ForjaDesktop {
     rename(a: string, b: string): Promise<void>
     remove(p: string): Promise<void>
   }
-  relayStatus(): Promise<{ on: boolean; addresses: string[]; requests: number }>
+  relayStatus(): Promise<{ on: boolean; addresses: string[]; requests: number; error?: string }>
+  openFirewall(): Promise<boolean>
   inputMouse(m: Record<string, unknown>): void
   inputKey(m: Record<string, unknown>): void
   padSend(ip: string, port: number, state: unknown): void

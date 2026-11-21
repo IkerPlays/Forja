@@ -10,6 +10,13 @@ CC     := $(DEVKITARM)/bin/arm-none-eabi-gcc
 ARCH   := -march=armv6k -mtune=mpcore -mfloat-abi=hard -mtp=soft
 CFLAGS := -g -Wall -O2 -mword-relocations -fomit-frame-pointer -ffunction-sections $(ARCH) \
           -I$(CTRULIB)/include -I$(DEVKITPRO)/portlibs/3ds/include -D__3DS__ -std=gnu11
+VERSION      ?= dev
+DEFAULT_URL  ?=
+DEFAULT_ANON ?=
+CFLAGS += -DVERSION=\"$(VERSION)\"
+ifneq ($(DEFAULT_URL),)
+CFLAGS += -DDEFAULT_URL=\"$(DEFAULT_URL)\" -DDEFAULT_ANON=\"$(DEFAULT_ANON)\"
+endif
 LDFLAGS := -specs=3dsx.specs -g $(ARCH) -Wl,-Map,$(TARGET).map -L$(CTRULIB)/lib -L$(DEVKITPRO)/portlibs/3ds/lib
 LIBS   := -lcitro2d -lcitro3d -lctru -lm
 

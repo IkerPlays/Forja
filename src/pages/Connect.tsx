@@ -8,7 +8,7 @@ import { PageHeader, StatusDot, useTick } from '../components/ui'
 import { isOnline } from '../lib/util'
 import type { Device } from '../lib/types'
 
-const RELEASE = 'https://github.com/IkerPlays/Forja/releases/tag/desktop-latest'
+const RELEASE = 'https://github.com/IkerPlays/Forja/releases/latest'
 
 function Step({ n, children }: { n: number; children: React.ReactNode }) {
   return <li className="step"><span className="step-n">{n}</span><div>{children}</div></li>

@@ -2,6 +2,7 @@ import { sb } from './supabase'
 import { desktop } from './native'
 import { DesktopPcAgent } from './desktopAgent'
 import { Link, ScreenSharer } from './devices'
+import { P2PAnswerer } from './p2p'
 import type { Device } from './types'
 
 export interface HostState { running: boolean; deviceId?: string; hostname?: string; viewers: number; consoles: number; log: string[]; error?: string }
@@ -16,6 +17,7 @@ class DesktopHost {
   private agent?: DesktopPcAgent
   private link?: Link
   private sharer?: ScreenSharer
+  private p2p?: P2PAnswerer
   private ds = new Map<string, { link: Link; off: () => void }>()
   private dsChannel?: ReturnType<ReturnType<typeof sb>['channel']>
   private studioId?: string
@@ -58,9 +60,10 @@ class DesktopHost {
 
   /** Canal del propio PC: ratón/teclado remotos y pantalla bajo demanda. */
   private async openLink(deviceId: string) {
-    this.sharer?.stop(); this.link?.close(); this.sharer = undefined
+    this.sharer?.stop(); this.p2p?.stop(); this.link?.close(); this.sharer = undefined
     const s = await desktop!.getSettings()
-    this.link = new Link(deviceId, s.allowScreen ? ['bridge', 'sharer'] : ['bridge'])
+    this.link = new Link(deviceId, ['bridge', 'files', ...(s.allowScreen ? ['sharer' as const] : [])])
+    this.p2p = new P2PAnswerer(this.link, desktop!.fs)
     this.link.onInput(m => {
       if (m?.k === 'mouse') desktop!.inputMouse(m)
       else if (m?.k === 'key') desktop!.inputKey(m)
@@ -94,6 +97,7 @@ class DesktopHost {
   async stop() {
     this.agent?.stop(); this.agent = undefined
     this.sharer?.stop(); this.sharer = undefined
+    this.p2p?.stop(); this.p2p = undefined
     this.link?.close(); this.link = undefined
     for (const h of this.ds.values()) { h.off(); h.link.close() }
     this.ds.clear()

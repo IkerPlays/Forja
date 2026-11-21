@@ -21,7 +21,7 @@ export default function ThisPc() {
   const toast = useToast()
   const host = useHostState()
   const [s, setS] = useState<DesktopSettings | null>(null)
-  const [relay, setRelay] = useState<{ on: boolean; addresses: string[]; requests: number } | null>(null)
+  const [relay, setRelay] = useState<{ on: boolean; addresses: string[]; requests: number; error?: string } | null>(null)
   const [info, setInfo] = useState<{ hostname: string; version: string; input: boolean; lan: string[] } | null>(null)
 
   const load = useCallback(async () => {
@@ -59,7 +59,7 @@ export default function ThisPc() {
       <section className="panel stack">
         <h2><HardDrive size={17} /> Archivos</h2>
         <Toggle on={s.fullAccess} onChange={v => set({ fullAccess: v })} label="Acceso a todo el equipo"
-          hint={s.fullAccess ? 'Cualquier miembro del estudio puede ver, subir, renombrar y borrar archivos de TODOS tus discos.' : 'Desactivado: solo las carpetas de abajo.'} danger={s.fullAccess} />
+          hint={s.fullAccess ? 'Activado: los miembros del estudio ven y gestionan TODOS tus discos desde Forja (sin subir nada: va directo). Desactívalo para limitarlo a carpetas.' : 'Desactivado: solo las carpetas de abajo.'} danger={s.fullAccess} />
         {!s.fullAccess && (
           <>
             <div className="people">
@@ -86,7 +86,19 @@ export default function ThisPc() {
         <h2><Radio size={17} /> Puente para la 3DS</h2>
         <Toggle on={s.relay} onChange={v => set({ relay: v })} label="Puente local para la 3DS"
           hint="Si la consola no consigue conectarse a internet por HTTPS, se conecta a este PC por tu WiFi y este PC hace de intermediario. La consola lo encuentra sola." />
-        {relay?.on && <p className="muted small">Escuchando en {relay.addresses.join(' · ') || '…'} · {relay.requests} peticiones atendidas</p>}
+        {relay?.on && (
+          <div className="callout">
+            <strong>Dirección de este PC para la 3DS:</strong> <code>{relay.addresses[0]?.replace('http://', '') || '…'}</code>
+            <small className="muted"> · {relay.requests} peticiones atendidas. En la 3DS, si no me encuentra sola, pulsa A y escribe la IP (sin el puerto).</small>
+          </div>
+        )}
+        {(relay?.error || (relay?.on && relay.requests === 0)) && (
+          <div className="callout">
+            {relay?.error && <p className="error small">{relay.error}</p>}
+            <p className="small muted">Si la 3DS no me encuentra, casi siempre es el cortafuegos de Windows (pide permiso la primera vez y suele denegarse en redes «públicas»).</p>
+            <button className="btn sm" onClick={async () => { const ok = await desktop!.openFirewall(); toast(ok ? 'Puertos abiertos en el cortafuegos' : 'No se pudo (¿has aceptado el permiso de administrador?)', ok ? 'ok' : 'err') }}>Abrir puertos en el cortafuegos (Windows)</button>
+          </div>
+        )}
         <p className="muted small">El mando de la 3DS (botones y pantalla táctil) también pasa por este PC cuando la consola tiene IP en su ficha.</p>
       </section>
 

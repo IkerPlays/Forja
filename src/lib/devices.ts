@@ -69,8 +69,8 @@ export class CommandClient {
  * Canal privado "device:<id>": señalización WebRTC, entrada (mando,    *
  * ratón, teclado) y presencia (quién comparte pantalla).               *
  * ------------------------------------------------------------------ */
-export interface Signal { from: string; to?: string; kind: 'join' | 'offer' | 'answer' | 'ice' | 'leave'; data?: any }
-export type Role = 'viewer' | 'sharer' | 'bridge'
+export interface Signal { from: string; to?: string; kind: 'join' | 'offer' | 'answer' | 'ice' | 'leave' | 'fs-offer' | 'fs-answer' | 'fs-ice'; data?: any }
+export type Role = 'viewer' | 'sharer' | 'bridge' | 'files'
 
 export type Peer = { id: string; roles: Role[] }
 

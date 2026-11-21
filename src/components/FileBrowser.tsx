@@ -5,13 +5,14 @@ import { CommandClient } from '../lib/devices'
 import type { Device, FileEntry } from '../lib/types'
 import { errMsg, formatBytes, uid } from '../lib/util'
 import { downloadChunked, uploadChunked, usesChunks } from '../lib/transfer'
+import type { P2PClient } from '../lib/p2p'
 import { useToast } from './ui'
 
 const join = (a: string, b: string) => (a.endsWith('/') ? a : a + '/') + b
 const parent = (p: string) => { const s = p.replace(/\/+$/, '').split('/'); s.pop(); return s.join('/') || '/' }
 
-export default function FileBrowser({ device, client, startPath = '/', dirActions }: {
-  device: Device; client: CommandClient; startPath?: string
+export default function FileBrowser({ device, client, p2p, startPath = '/', dirActions }: {
+  device: Device; client: CommandClient; p2p?: P2PClient | null; startPath?: string
   dirActions?: (entry: FileEntry, path: string) => ReactNode
 }) {
   const toast = useToast()
@@ -21,15 +22,24 @@ export default function FileBrowser({ device, client, startPath = '/', dirAction
   const [busy, setBusy] = useState<string | null>(null)
   const [drag, setDrag] = useState(false)
   const fileInput = useRef<HTMLInputElement>(null)
+  const direct = !!p2p && p2p.open
+
+  /** Con conexión directa (WebRTC) no se sube nada al servidor; si se corta, se usa el servidor. */
+  async function viaDirect<T>(fn: (c: P2PClient) => Promise<T>): Promise<{ ok: true; v: T } | { ok: false }> {
+    if (!p2p || !p2p.open) return { ok: false }
+    try { return { ok: true, v: await fn(p2p) } } catch (e) { if (/conexión directa/.test(errMsg(e)) || !p2p.open) return { ok: false }; throw e }
+  }
+  const pct = (d: number, t: number) => (t ? Math.round((d / t) * 100) + '%' : '')
 
   const load = useCallback(async (p: string) => {
     setErr(null); setEntries(null)
     try {
-      const res = await client.run<{ entries: FileEntry[]; truncated?: boolean }>('list_dir', { path: p })
+      const d = await viaDirect(c => c.list(p))
+      const res = d.ok ? d.v as { entries: FileEntry[]; truncated?: boolean } : await client.run<{ entries: FileEntry[]; truncated?: boolean }>('list_dir', { path: p })
       setEntries([...res.entries].sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name, 'es', { numeric: true }) : a.type === 'dir' ? -1 : 1)))
       if (res.truncated) toast('Carpeta muy grande: se muestran solo los primeros elementos')
     } catch (e) { setErr(errMsg(e)); setEntries([]) }
-  }, [client, toast])
+  }, [client, toast, p2p])
 
   useEffect(() => { void load(path) }, [path, load])
 
@@ -38,6 +48,14 @@ export default function FileBrowser({ device, client, startPath = '/', dirAction
   async function download(e: FileEntry) {
     const full = join(path, e.name)
     setBusy(`Preparando ${e.name}…`)
+    try {
+      const d = await viaDirect(c => c.download(full, (done, total) => setBusy(`Descargando ${e.name} ${pct(done, total)}`)))
+      if (d.ok) {
+        const url = URL.createObjectURL(d.v)
+        const a = document.createElement('a'); a.href = url; a.download = e.name; document.body.appendChild(a); a.click(); a.remove()
+        setTimeout(() => URL.revokeObjectURL(url), 60_000); setBusy(null); return
+      }
+    } catch (er) { toast(errMsg(er), 'err'); setBusy(null); return }
     if (usesChunks(device)) {
       try { await downloadChunked(client, full, e.name, setBusy) } catch (er) { toast(errMsg(er), 'err') } finally { setBusy(null) }
       return
@@ -53,6 +71,10 @@ export default function FileBrowser({ device, client, startPath = '/', dirAction
 
   async function upload(files: FileList | File[]) {
     for (const f of Array.from(files)) {
+      try {
+        const d = await viaDirect(c => c.upload(join(path, f.name), f, (done, total) => setBusy(`Enviando ${f.name} ${pct(done, total)}`)))
+        if (d.ok) { toast(`${f.name} enviado`); continue }
+      } catch (er) { toast(errMsg(er), 'err'); continue }
       if (f.size > 50 * 1024 * 1024) { toast(`${f.name}: máximo 50 MB por archivo`, 'err'); continue }
       setBusy(`Subiendo ${f.name}…`)
       if (usesChunks(device)) {
@@ -75,13 +97,13 @@ export default function FileBrowser({ device, client, startPath = '/', dirAction
     try {
       if (type === 'mkdir') {
         const n = prompt('Nombre de la carpeta nueva')?.trim(); if (!n) return
-        await client.run('mkdir', { path: join(path, n) })
+        const d = await viaDirect(c => c.mkdir(join(path, n))); if (!d.ok) await client.run('mkdir', { path: join(path, n) })
       } else if (type === 'rename' && e) {
         const n = prompt('Nuevo nombre', e.name)?.trim(); if (!n || n === e.name) return
-        await client.run('rename', { path: join(path, e.name), to: join(path, n) })
+        const d = await viaDirect(c => c.rename(join(path, e.name), join(path, n))); if (!d.ok) await client.run('rename', { path: join(path, e.name), to: join(path, n) })
       } else if (type === 'delete' && e) {
         if (!confirm(`¿Eliminar «${e.name}» del dispositivo? No se puede deshacer.`)) return
-        await client.run('delete', { path: join(path, e.name), type: e.type })
+        const d = await viaDirect(c => c.remove(join(path, e.name))); if (!d.ok) await client.run('delete', { path: join(path, e.name), type: e.type })
       }
       void load(path)
     } catch (er) { toast(errMsg(er), 'err') }
@@ -99,6 +121,7 @@ export default function FileBrowser({ device, client, startPath = '/', dirAction
           ))}
         </div>
         <div className="row">
+          {device.kind === 'pc' && <span className={`chip ${direct ? 'ok-chip' : ''}`} title={direct ? 'Sin subir nada al servidor y sin límite de tamaño' : 'Pasa por el servidor (máx. 50 MB)'}>{direct ? '⚡ Directo' : 'Vía servidor'}</span>}
           <button className="icon-btn" onClick={() => load(path)} aria-label="Actualizar"><RefreshCw size={16} /></button>
           <button className="btn sm" onClick={() => action('mkdir')} disabled={path === '/' && device.kind === 'pc'}><FolderPlus size={15} /> Carpeta</button>
           <button className="btn sm primary" onClick={() => fileInput.current?.click()} disabled={path === '/' && device.kind === 'pc'}><Upload size={15} /> Subir</button>
@@ -133,7 +156,7 @@ export default function FileBrowser({ device, client, startPath = '/', dirAction
           {!entries.length && !err && <li className="muted file-empty">Carpeta vacía. Arrastra archivos aquí para subirlos.</li>}
         </ul>
       )}
-      <p className="muted small files-note">Transferencias de hasta 50 MB por archivo (límite de Supabase Storage gratuito).</p>
+      <p className="muted small files-note">{direct ? 'Conexión directa con el PC: sin subir nada al servidor y sin límite de tamaño.' : 'Transferencias de hasta 50 MB por archivo (pasan por el servidor).'}</p>
     </div>
   )
 }

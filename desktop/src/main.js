@@ -16,10 +16,13 @@ if (!app.requestSingleInstanceLock()) { app.quit(); process.exit(0) }
 
 /* ---------------- Ajustes (userData/forja-desktop.json) ---------------- */
 const settingsFile = () => path.join(app.getPath('userData'), 'forja-desktop.json')
-let settings = { webUrl: DEFAULT_WEB_URL, roots: [], fullAccess: false, allowInput: true, allowScreen: true, relay: true, autostart: false, hostId: '' }
+let settings = { webUrl: DEFAULT_WEB_URL, roots: [], fullAccess: true, allowInput: true, allowScreen: true, relay: true, autostart: false, hostId: '' }
 function loadSettings() {
-  try { settings = { ...settings, ...JSON.parse(fs.readFileSync(settingsFile(), 'utf8')) } } catch { /* primera vez */ }
+  let first = false
+  try { settings = { ...settings, ...JSON.parse(fs.readFileSync(settingsFile(), 'utf8')) } } catch { first = true }
   if (!settings.hostId) { settings.hostId = crypto.randomUUID(); saveSettings() }
+  // Primera vez: el PC queda disponible "directamente" (todo el equipo + arranque con el sistema)
+  if (first) { settings.autostart = true; saveSettings(); if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: true, args: ['--hidden'] }) }
 }
 function saveSettings() {
   try { fs.mkdirSync(path.dirname(settingsFile()), { recursive: true }); fs.writeFileSync(settingsFile(), JSON.stringify(settings, null, 2)) } catch (e) { console.warn('ajustes:', e.message) }
@@ -28,7 +31,7 @@ const getRoots = () => (settings.fullAccess ? roots.systemRoots() : roots.parseR
 const fsApi = roots.api(getRoots)
 
 /* ---------------- Ventana y bandeja ---------------- */
-let win = null, tray = null, quitting = false, padSender = null, relayHandle = null
+let win = null, tray = null, quitting = false, padSender = null, relayHandle = null, relayError = ''
 const iconPath = path.join(__dirname, 'icon.png')
 
 function createWindow() {
@@ -70,11 +73,12 @@ function createTray() {
 /* ---------------- Puente local para la 3DS ---------------- */
 async function applyRelay() {
   if (relayHandle) { relayHandle.stop(); relayHandle = null }
+  relayError = ''
   if (!settings.relay) return
   try {
     const cfg = await (await fetch(new URL('/forja-config.json', settings.webUrl))).json()
-    relayHandle = relay.start({ supabaseUrl: cfg.url, anon: cfg.anon, onLog: m => console.log(m) })
-  } catch (e) { console.warn('No se pudo arrancar el puente local:', e.message) }
+    relayHandle = relay.start({ supabaseUrl: cfg.url, anon: cfg.anon, onLog: m => { console.log(m); if (/relay (http|udp):/.test(m)) relayError = m } })
+  } catch (e) { relayError = 'No se pudo arrancar el puente local: ' + e.message; console.warn(relayError) }
 }
 
 /* ---------------- IPC ---------------- */
@@ -109,7 +113,19 @@ handle('fs:write', (p, data, append) => fsApi.write(p, data, append))
 handle('fs:mkdir', p => fsApi.mkdir(p))
 handle('fs:rename', (a, b) => fsApi.rename(a, b))
 handle('fs:remove', p => fsApi.remove(p))
-handle('relay:status', () => (relayHandle ? { on: true, ...relayHandle.status() } : { on: false, addresses: [], requests: 0 }))
+handle('relay:status', () => (relayHandle ? { on: true, ...relayHandle.status() } : { on: false, addresses: [], requests: 0, error: relayError }))
+// Windows: abre los puertos de la 3DS en el cortafuegos (pide permiso de administrador)
+handle('fw:allow', () => new Promise(resolve => {
+  if (process.platform !== 'win32') return resolve(false)
+  const cmd = path.join(os.tmpdir(), 'forja-firewall.cmd')
+  fs.writeFileSync(cmd, [
+    '@echo off',
+    'netsh advfirewall firewall delete rule name="Forja puente 3DS (TCP)" >nul 2>&1',
+    'netsh advfirewall firewall delete rule name="Forja puente 3DS (UDP)" >nul 2>&1',
+    'netsh advfirewall firewall add rule name="Forja puente 3DS (TCP)" dir=in action=allow protocol=TCP localport=8765 profile=any',
+    'netsh advfirewall firewall add rule name="Forja puente 3DS (UDP)" dir=in action=allow protocol=UDP localport=8766 profile=any', ''].join('\r\n'))
+  require('node:child_process').execFile('powershell', ['-NoProfile', '-Command', `Start-Process -FilePath '${cmd}' -Verb RunAs -Wait`], err => resolve(!err))
+}))
 
 const bounds = () => {
   const d = screen.getPrimaryDisplay(); const sf = process.platform === 'darwin' ? 1 : d.scaleFactor

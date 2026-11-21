@@ -1,0 +1,124 @@
+name: Release
+
+# Crear una versión: git tag v1.2.3 && git push origin v1.2.3
+# (o Actions → Release → Run workflow, escribiendo 1.2.3). Publica UNA release con todo:
+# 3DS (.cia/.3dsx), Windows (.exe) y Linux (.AppImage).
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Versión (p. ej. 1.2.3)'
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  RAW_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
+  SITE: https://forja-hub.netlify.app
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+    steps:
+      - id: v
+        run: |
+          V="${RAW_VERSION#v}"
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "tag=v$V" >> "$GITHUB_OUTPUT"
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.v.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: Forja ${{ steps.v.outputs.tag }}
+          generate_release_notes: true
+          body: |
+            **Forja ${{ steps.v.outputs.tag }}**
+
+            | Para | Archivo |
+            |---|---|
+            | Nintendo 3DS (instalar con FBI) | `Forja3DS.cia` |
+            | Nintendo 3DS (Homebrew Launcher, `/3ds/`) | `Forja3DS.3dsx` |
+            | Windows | `Forja-Setup-${{ steps.v.outputs.version }}.exe` |
+            | Linux | `Forja-${{ steps.v.outputs.version }}.AppImage` |
+
+            Guía de conexión: https://forja-hub.netlify.app/connect
+
+  threeds:
+    needs: release
+    runs-on: ubuntu-latest
+    container: devkitpro/devkitarm:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Herramientas (makerom y bannertool)
+        run: |
+          apt-get update -qq && apt-get install -y -qq git curl build-essential cmake zlib1g-dev
+          git clone --depth 1 https://github.com/3DSGuy/Project_CTR /tmp/ctr
+          make -C /tmp/ctr/makerom -j"$(nproc)"
+          install -m755 /tmp/ctr/makerom/bin/makerom /usr/local/bin/makerom
+          git clone --depth 1 --recursive https://github.com/carstene1ns/3ds-bannertool /tmp/bannertool
+          cmake -S /tmp/bannertool -B /tmp/bannertool/build -DCMAKE_BUILD_TYPE=Release
+          cmake --build /tmp/bannertool/build -j"$(nproc)"
+          install -m755 "$(find /tmp/bannertool/build -name bannertool -type f | head -1)" /usr/local/bin/bannertool
+      - name: Compilar (.3dsx y .cia)
+        run: |
+          # La URL y la clave de Supabase son PÚBLICAS: se integran para que la 3DS no dependa de la web
+          CFG="$(curl -fsS "$SITE/forja-config.json" || echo '{}')"
+          URL="$(echo "$CFG" | sed -n 's/.*"url":"\([^"]*\)".*/\1/p')"
+          ANON="$(echo "$CFG" | sed -n 's/.*"anon":"\([^"]*\)".*/\1/p')"
+          echo "Supabase integrado: ${URL:-(ninguno, se leerá de la web)}"
+          make -C agent3ds VERSION="${{ needs.release.outputs.version }}" DEFAULT_URL="$URL" DEFAULT_ANON="$ANON"
+          make -C agent3ds cia VERSION="${{ needs.release.outputs.version }}" DEFAULT_URL="$URL" DEFAULT_ANON="$ANON"
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.release.outputs.tag }}
+          files: |
+            agent3ds/Forja3DS.cia
+            agent3ds/Forja3DS.3dsx
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          path: web
+      - name: Actualizar las descargas de la web
+        run: |
+          mkdir -p web/public/downloads
+          cp agent3ds/Forja3DS.cia agent3ds/Forja3DS.3dsx web/public/downloads/
+          cd web
+          git config --global --add safe.directory "$GITHUB_WORKSPACE/web"
+          git config user.name "github-actions"
+          git config user.email "actions@users.noreply.github.com"
+          git add public/downloads
+          git diff --cached --quiet || { git commit -m "Forja3DS ${{ needs.release.outputs.tag }}: actualizar descargas de la web" && git push origin HEAD:main; }
+
+  desktop:
+    needs: release
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: desktop
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Versión
+        run: npm version "${{ needs.release.outputs.version }}" --no-git-tag-version --allow-same-version
+      - run: npm ci
+      - run: npm run selftest
+      - run: npm run dist
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.release.outputs.tag }}
+          files: |
+            desktop/dist/Forja-Setup-*.exe
+            desktop/dist/Forja-*.AppImage

@@ -33,11 +33,20 @@
 
 #include "roots.h"
 
-#define VERSION "0.3.0"
+#ifndef VERSION
+#define VERSION "dev"
+#endif
 #define CONFIG_PATH "sdmc:/3ds/forja/config.txt"
 #define SESSION_PATH "sdmc:/3ds/forja/session.txt"
 #ifndef DEFAULT_SITE
 #define DEFAULT_SITE "https://forja-hub.netlify.app"
+#endif
+/* La CI integra aquí la URL y la clave PÚBLICAS de Supabase (así no hace falta pasar por la web) */
+#ifndef DEFAULT_URL
+#define DEFAULT_URL ""
+#endif
+#ifndef DEFAULT_ANON
+#define DEFAULT_ANON ""
 #endif
 #define PART_SIZE (256 * 1024)   /* trozo al subir al servidor (la web acepta cualquier tamaño) */
 #define MAX_FILE (50u * 1024u * 1024u)
@@ -49,7 +58,9 @@ static char g_site[200], g_refresh[1024];
 static char g_token[4096];
 static time_t g_token_at = 0;
 static u32 g_last_status;
-static Result g_cfg_rc;          /* último fallo de red al leer la configuración */
+static Result g_cfg_rc, g_net_rc;
+static char g_relay_saved[100], g_manual_ip[48];
+static int g_manual_new;          /* último fallo de red al leer la configuración */
 static int g_relay;             /* 1 = hablando con la app de escritorio por HTTP en la WiFi local */
 static u32 *g_soc_buf;
 static char g_last_err[120];
@@ -310,7 +321,7 @@ static void save_session(void) {
   mkdir("sdmc:/3ds/forja", 0777);
   FILE *f = fopen(SESSION_PATH, "w");
   if (!f) return;
-  fprintf(f, "refresh=%s\ndevice=%s\n", g_refresh, g_device);
+  fprintf(f, "refresh=%s\ndevice=%s\nrelay=%s\n", g_refresh, g_device, g_relay_saved);
   fclose(f);
 }
 
@@ -324,6 +335,7 @@ static void load_session(void) {
     trim(line);
     if (!strncmp(line, "refresh=", 8)) snprintf(g_refresh, sizeof g_refresh, "%s", line + 8);
     else if (!strncmp(line, "device=", 7)) snprintf(g_device, sizeof g_device, "%s", line + 7);
+    else if (!strncmp(line, "relay=", 6)) snprintf(g_relay_saved, sizeof g_relay_saved, "%s", line + 6);
   }
   fclose(f);
 }
@@ -336,6 +348,7 @@ static int auth_call(const char *path, const char *body) {
   Resp r;
   Result rc = http_do(HTTPC_METHOD_POST, url, hdrs, body, (u32)strlen(body), &r);
   g_last_status = 0;
+  g_net_rc = rc;
   if (R_FAILED(rc)) { char m[120]; set_error("%s", rc_text(rc, m, sizeof m)); return 0; }
   g_last_status = r.status;
   if (r.status != 200) {
@@ -755,7 +768,7 @@ static void draw_top(unsigned tick, State st, const char *status, const char *co
       C2D_DrawCircleSolid(200, 90, 0, 16, C_ERR);
       text_at("!", 200, 74, 0.8f, CLR(255, 255, 255), C2D_AlignCenter);
       text_wrap(status, 40, 114, 0.5f, C_TEXT, 320);
-      text_at("Reintentando automáticamente…", 200, 170, 0.42f, C_MUTED, C2D_AlignCenter);
+      text_at("Reintentando…    A: escribir la IP del PC (app de escritorio)", 200, 170, 0.42f, C_MUTED, C2D_AlignCenter);
       break;
     default:
       spinner(200, 100, 20, tick, 0xff, 0x7a, 0x2f);
@@ -879,9 +892,25 @@ static int relay_discover(char *out, size_t cap) {
   return 0;
 }
 
+/* Plan B: dirección guardada/escrita a mano y, si no, descubrimiento por UDP. 1 = configuración leída del PC. */
+static int try_relay(void) {
+  char base[100];
+  if (g_relay_saved[0]) {
+    snprintf(g_site, sizeof g_site, "%s", g_relay_saved);
+    if (fetch_site_config()) { g_relay = 1; return 1; }
+  }
+  if (relay_discover(base, sizeof base)) {
+    snprintf(g_site, sizeof g_site, "%s", base);
+    if (fetch_site_config()) { g_relay = 1; snprintf(g_relay_saved, sizeof g_relay_saved, "%s", base); save_session(); return 1; }
+  }
+  return 0;
+}
+
 static void worker(void *arg) {
   (void)arg;
   snprintf(g_site, sizeof g_site, "%s", DEFAULT_SITE);
+  snprintf(g_url, sizeof g_url, "%s", DEFAULT_URL);
+  snprintf(g_anon, sizeof g_anon, "%s", DEFAULT_ANON);
   load_session();
   load_config();
   Result hrc = httpcInit(0x100000);
@@ -895,6 +924,21 @@ static void worker(void *arg) {
   while (!g_quit) {
     time_t now = time(NULL);
 
+    LightLock_Lock(&g_lock);
+    int manual = g_manual_new; char mip[48]; snprintf(mip, sizeof mip, "%s", g_manual_ip); g_manual_new = 0;
+    LightLock_Unlock(&g_lock);
+    if (manual && mip[0]) {
+      snprintf(g_relay_saved, sizeof g_relay_saved, strchr(mip, ':') ? "http://%s" : "http://%s:8765", mip);
+      save_session();
+      set_state(ST_CONFIG, "Probando el PC que indicaste…");
+      snprintf(g_site, sizeof g_site, "%s", g_relay_saved);
+      cfg_ok = fetch_site_config();
+      if (cfg_ok) { g_relay = 1; authed = 0; last_try = 0; }
+      else set_error("No pude hablar con %s. ¿Está abierta la app de escritorio y el cortafuegos permite el puerto 8765?", g_relay_saved);
+      last_try = now;
+      continue;
+    }
+
     if (R_FAILED(hrc)) {
       /* sin servicio HTTP no hay nada que hacer */
     } else if (!cfg_ok) {
@@ -903,17 +947,9 @@ static void worker(void *arg) {
         set_state(ST_CONFIG, "Leyendo la configuración de la web…");
         cfg_ok = fetch_site_config();
         if (!cfg_ok && R_FAILED(g_cfg_rc) && (u32)g_cfg_rc != NO_NETWORK) {
-          /* HTTPS no funciona en esta consola: probar con la app de escritorio en la WiFi local */
           set_state(ST_CONFIG, "HTTPS falló. Buscando la app de escritorio de Forja en tu WiFi…");
-          char base[100];
-          if (relay_discover(base, sizeof base)) {
-            snprintf(g_site, sizeof g_site, "%s", base);
-            g_relay = 1;
-            set_state(ST_CONFIG, "Puente local encontrado. Leyendo configuración…");
-            cfg_ok = fetch_site_config();
-          } else {
-            set_error("Sin HTTPS (%08lX) y no encuentro la app de escritorio de Forja en tu WiFi. Ábrela en tu PC (misma red).", (unsigned long)g_cfg_rc);
-          }
+          cfg_ok = try_relay();
+          if (!cfg_ok) set_error("Sin HTTPS (%08lX) y no encuentro la app de escritorio. Ábrela en tu PC (misma WiFi) o pulsa A para escribir su IP.", (unsigned long)g_cfg_rc);
         }
         if (!cfg_ok && g_state != ST_ERROR) set_error("No se pudo conectar con %s", g_site);
       }
@@ -922,6 +958,11 @@ static void worker(void *arg) {
         last_try = now;
         set_state(ST_AUTH, "Iniciando sesión…");
         authed = login();
+        if (!authed && !g_relay && R_FAILED(g_net_rc) && (u32)g_net_rc != NO_NETWORK) {
+          set_state(ST_AUTH, "HTTPS falló. Buscando la app de escritorio de Forja en tu WiFi…");
+          if (try_relay()) { set_state(ST_AUTH, "Puente local encontrado. Iniciando sesión…"); authed = login(); }
+          else set_error("Sin HTTPS (%08lX) y no encuentro la app de escritorio. Ábrela en tu PC (misma WiFi) o pulsa A para escribir su IP.", (unsigned long)g_net_rc);
+        }
         if (authed && g_device[0]) { set_state(ST_RUN, "Conectada"); heartbeat(); last_beat = now; }
         else if (authed) { set_state(ST_PAIR, "Pidiendo código…"); last_poll = 0; }
         else if (g_state != ST_ERROR) set_error("No se pudo iniciar sesión");
@@ -957,7 +998,9 @@ static void worker(void *arg) {
           set_error("Sin respuesta del servidor");
           last_poll = time(NULL) + 8;   /* espera ~10 s antes de volver a intentarlo */
           if (g_relay && ++fails >= 4) {   /* el PC cambió de IP o se cerró: volver a buscar */
-            fails = 0; cfg_ok = 0; authed = 0; g_relay = 0; g_url[0] = 0; g_anon[0] = 0;
+            fails = 0; cfg_ok = 0; authed = 0; g_relay = 0;
+            snprintf(g_url, sizeof g_url, "%s", DEFAULT_URL); snprintf(g_anon, sizeof g_anon, "%s", DEFAULT_ANON);
+            cfg_ok = g_url[0] && g_anon[0];
             snprintf(g_site, sizeof g_site, "%s", DEFAULT_SITE);
           }
         }
@@ -989,6 +1032,19 @@ int main(void) {
   while (aptMainLoop()) {
     hidScanInput();
     if (hidKeysDown() & KEY_START) break;
+    if (hidKeysDown() & KEY_A) {
+      LightLock_Lock(&g_lock); State cur = g_state; LightLock_Unlock(&g_lock);
+      if (cur == ST_ERROR || cur == ST_CONFIG) {
+        SwkbdState sw; char ip[40] = "";
+        swkbdInit(&sw, SWKBD_TYPE_NUMPAD, 2, 21);
+        swkbdSetNumpadKeys(&sw, '.', ':');
+        swkbdSetHintText(&sw, "IP del PC, ej. 192.168.1.20");
+        swkbdSetValidation(&sw, SWKBD_NOTEMPTY_NOTBLANK, 0, 0);
+        if (swkbdInputText(&sw, ip, sizeof ip) == SWKBD_BUTTON_CONFIRM && ip[0]) {
+          LightLock_Lock(&g_lock); snprintf(g_manual_ip, sizeof g_manual_ip, "%s", ip); g_manual_new = 1; LightLock_Unlock(&g_lock);
+        }
+      }
+    }
 
     /* Copia del estado para dibujar sin retener el bloqueo */
     LightLock_Lock(&g_lock);
