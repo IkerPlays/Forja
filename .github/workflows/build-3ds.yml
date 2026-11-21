@@ -6,6 +6,9 @@ on:
     paths: ['agent3ds/**', '.github/workflows/build-3ds.yml']
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -14,9 +17,14 @@ jobs:
       - uses: actions/checkout@v4
       - name: Compilar
         run: make -C agent3ds
-      - uses: actions/upload-artifact@v4
+      # Los artefactos de Actions tienen cuota; las Releases no.
+      - name: Publicar Release (forja3ds-latest)
+        uses: softprops/action-gh-release@v2
         with:
-          name: Forja3DS
-          path: |
+          tag_name: forja3ds-latest
+          name: Forja3DS (última versión)
+          prerelease: true
+          body: App homebrew para la 3DS. Copia Forja3DS.3dsx a /3ds/ en la SD.
+          files: |
             agent3ds/Forja3DS.3dsx
             agent3ds/Forja3DS.smdh
