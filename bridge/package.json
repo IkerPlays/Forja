@@ -1,0 +1,19 @@
+{
+  "name": "forja-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Puente entre Forja y tu 3DS / tu PC: archivos, mando, ratón y teclado.",
+  "type": "module",
+  "engines": { "node": ">=20.10" },
+  "scripts": {
+    "start": "node --env-file=.env src/index.mjs",
+    "selftest": "node test/selftest.mjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0",
+    "basic-ftp": "^5.0.5"
+  },
+  "optionalDependencies": {
+    "@jitsi/robotjs": "^0.6.13"
+  }
+}
