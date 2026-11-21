@@ -1,0 +1,32 @@
+{
+  "name": "forja-desktop",
+  "productName": "Forja",
+  "version": "0.1.0",
+  "description": "Forja para escritorio: convierte tu PC en un dispositivo de Forja (archivos, pantalla, ratón, teclado) y enlaza tu 3DS por la red local.",
+  "main": "src/main.js",
+  "author": "Forja",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "selftest": "node test/selftest.js",
+    "dist": "electron-builder --publish never"
+  },
+  "dependencies": {
+    "@nut-tree-fork/nut-js": "^4.2.6"
+  },
+  "devDependencies": {
+    "electron": "^45.4.1",
+    "electron-builder": "^26.18.0"
+  },
+  "build": {
+    "appId": "app.forja.desktop",
+    "productName": "Forja",
+    "directories": { "output": "dist", "buildResources": "build" },
+    "files": ["src/**/*", "package.json"],
+    "asarUnpack": ["**/node_modules/@nut-tree-fork/**", "**/node_modules/@nut-tree/**"],
+    "win": { "target": ["nsis"], "artifactName": "Forja-Setup-${version}.${ext}" },
+    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true, "perMachine": false },
+    "linux": { "target": ["AppImage"], "category": "Utility", "artifactName": "Forja-${version}.${ext}" }
+  }
+}

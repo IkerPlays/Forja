@@ -1,5 +1,6 @@
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
-import { Home, KanbanSquare, Gamepad2, Users, Settings as Cog, Tablet, LogOut, ChevronsUpDown, Check } from 'lucide-react'
+import { Home, KanbanSquare, Gamepad2, Users, Settings as Cog, Tablet, LogOut, ChevronsUpDown, Check, Plug, Monitor } from 'lucide-react'
+import { isDesktop } from '../lib/native'
 import { useState } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { useStudio } from '../context/StudioContext'
@@ -18,6 +19,8 @@ export default function Layout() {
     { to: '/3ds', label: '3DS', icon: Tablet, studio: true },
     { to: '/games', label: 'Juegos', icon: Gamepad2, studio: true },
     { to: '/team', label: 'Equipo', icon: Users, studio: true },
+    { to: '/connect', label: 'Conectar', icon: Plug, studio: true },
+    ...(isDesktop ? [{ to: '/this-pc', label: 'Este equipo', icon: Monitor, studio: true }] : []),
     { to: '/settings', label: 'Ajustes', icon: Cog },
   ].filter(i => !i.studio || isMember)
 

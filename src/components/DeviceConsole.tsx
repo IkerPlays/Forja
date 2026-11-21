@@ -3,6 +3,9 @@ import { Activity, FolderOpen, Gamepad2, MonitorPlay, Settings2, Terminal, Trash
 import { sb, readConfig } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import PcFolderPanel from './PcFolderPanel'
+import { Link as RouterLink } from 'react-router-dom'
+import { isDesktop } from '../lib/native'
+import { useHostState } from './DesktopHostMount'
 import { CommandClient, Link } from '../lib/devices'
 import type { Device, FileEntry } from '../lib/types'
 import type { PadState } from '../lib/pad'
@@ -23,7 +26,9 @@ export default function DeviceConsole({ device, onChanged, onDeleted, startPath,
   const now = useTick(8000)
   const online = isOnline(device.last_seen, now)
   const is3ds = device.kind === '3ds'
-  const [tab, setTab] = useState<Tab>(startPath ? 'files' : is3ds ? 'play' : 'screen')
+  const host = useHostState()
+  const isLocal = isDesktop && host.deviceId === device.id   // el PC en el que estás ahora mismo
+  const [tab, setTab] = useState<Tab>(startPath || isLocal ? 'files' : is3ds ? 'play' : 'screen')
   const [editing, setEditing] = useState(false)
   const [help, setHelp] = useState(false)
 
@@ -39,7 +44,7 @@ export default function DeviceConsole({ device, onChanged, onDeleted, startPath,
     if (!needsLink) return
     const l = new Link(device.id, 'viewer')
     setLinkErr(null)
-    const off = l.onPresence(peers => setHasBridge(peers.some(p => p.role === 'bridge')))
+    const off = l.onPresence(peers => setHasBridge(peers.some(p => p.roles.includes('bridge'))))
     l.ready.then(() => setLink(l)).catch(e => setLinkErr(errMsg(e)))
     return () => { off(); l.close(); setLink(null); setHasBridge(false) }
   }, [device.id, needsLink])
@@ -57,7 +62,7 @@ export default function DeviceConsole({ device, onChanged, onDeleted, startPath,
   }, [link])
 
   const tabs: { id: Tab; label: string; icon: ReactNode }[] = [
-    ...(is3ds ? [{ id: 'play' as Tab, label: 'Jugar', icon: <Gamepad2 size={16} /> }] : [{ id: 'screen' as Tab, label: 'Pantalla', icon: <MonitorPlay size={16} /> }]),
+    ...(is3ds ? [{ id: 'play' as Tab, label: 'Jugar', icon: <Gamepad2 size={16} /> }] : isLocal ? [] : [{ id: 'screen' as Tab, label: 'Pantalla y control', icon: <MonitorPlay size={16} /> }]),
     { id: 'files', label: 'Archivos', icon: <FolderOpen size={16} /> },
     { id: 'setup', label: 'Conexión', icon: <Settings2 size={16} /> },
   ]
@@ -81,6 +86,7 @@ export default function DeviceConsole({ device, onChanged, onDeleted, startPath,
           </small>
         </div>
         {!online && is3ds && <button className="btn sm" onClick={() => setHelp(true)}><Terminal size={14} /> ¿Cómo conecto la 3DS?</button>}
+        {!online && !is3ds && <RouterLink className="btn sm" to="/connect"><Terminal size={14} /> ¿Cómo conecto este PC?</RouterLink>}
       </div>
 
       <div className="tabs">
@@ -96,9 +102,8 @@ export default function DeviceConsole({ device, onChanged, onDeleted, startPath,
                 <div>
                   {!hasBridge && (
                     <div className="callout">
-                      <strong>El mando necesita un enlace local.</strong> Un navegador no puede enviar los botones a la 3DS por tu WiFi
-                      (usa UDP). Si quieres controlarla desde aquí, ejecuta el bridge opcional en un PC de tu red
-                      (<code>docs/3DS.md</code>). Archivos y pantalla funcionan sin él.
+                      <strong>El mando necesita la app de escritorio.</strong> Un navegador no puede enviar los botones a la 3DS por tu WiFi (usa UDP).
+                      Abre <strong>Forja para escritorio</strong> en un PC de tu red y pon la IP de la 3DS en su ficha (<RouterLink to="/connect">guía</RouterLink>).
                     </div>
                   )}
                   <div className={hasBridge ? '' : 'pad-off'}><Gamepad3DS onChange={sendPad} /></div>
@@ -114,16 +119,23 @@ export default function DeviceConsole({ device, onChanged, onDeleted, startPath,
         )}
         {tab === 'files' && (
           <>
-            {!is3ds && <PcFolderPanel deviceId={device.id} />}
+            {isLocal && <div className="callout">Este es <strong>el PC en el que estás</strong>. Aquí ves sus archivos como los ven tus otros dispositivos; qué se comparte lo eliges en <RouterLink to="/this-pc">Este equipo</RouterLink>.</div>}
+            {!is3ds && !isLocal && !online && (
+              <div className="callout">
+                Este PC no está conectado. Instala la <strong>app de escritorio</strong> y ábrela en él (<RouterLink to="/connect">cómo hacerlo</RouterLink>)
+                {!isDesktop && <>, o comparte una carpeta desde este navegador:</>}
+              </div>
+            )}
+            {!is3ds && !isDesktop && <PcFolderPanel deviceId={device.id} />}
             {is3ds && !online && <OfflineHint onHelp={() => setHelp(true)} />}
-            {(is3ds || online) && <FileBrowser device={device} client={client} startPath={startPath} dirActions={dirActions} />}
+            {(is3ds || online || isLocal) && <FileBrowser device={device} client={client} startPath={startPath} dirActions={dirActions} />}
           </>
         )}
         {tab === 'setup' && (
           <div className="stack">
             <div className="callout">
               <h4><Activity size={15} /> Estado</h4>
-              <p>{online ? 'El dispositivo está conectado y atendiendo órdenes.' : is3ds ? 'La 3DS no está conectada: abre la app Forja3DS en la consola (con WiFi).' : 'Este PC no está compartiendo: abre Forja en él, pestaña Archivos, y elige una carpeta.'}</p>
+              <p>{online ? 'El dispositivo está conectado y atendiendo órdenes.' : is3ds ? 'La 3DS no está conectada: abre la app Forja3DS en la consola (con WiFi).' : 'Este PC no está conectado: abre la app de escritorio de Forja en él.'}</p>
               <div className="row wrap">
                 {is3ds && <button className="btn" onClick={() => setHelp(true)}><Terminal size={15} /> Instalar / vincular la 3DS</button>}
                 <button className="btn" onClick={() => setEditing(true)}><Settings2 size={15} /> Editar datos</button>

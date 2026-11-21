@@ -5,6 +5,7 @@ import { AuthProvider, useAuth } from './context/AuthContext'
 import { StudioProvider, useStudio } from './context/StudioContext'
 import { Spinner } from './components/ui'
 import Layout from './components/Layout'
+import DesktopHostMount from './components/DesktopHostMount'
 import Setup from './pages/Setup'
 import Login from './pages/Login'
 import Onboarding from './pages/Onboarding'
@@ -19,6 +20,8 @@ const Games = lazy(() => import('./pages/Games'))
 const GameDetail = lazy(() => import('./pages/GameDetail'))
 const PcDevices = lazy(() => import('./pages/PcDevices'))
 const Team = lazy(() => import('./pages/Team'))
+const Connect = lazy(() => import('./pages/Connect'))
+const ThisPc = lazy(() => import('./pages/ThisPc'))
 
 function Gate() {
   const { session, profile, loading } = useAuth()
@@ -33,6 +36,7 @@ function Gate() {
 
   return (
     <Suspense fallback={<Spinner />}>
+      {isMember && <DesktopHostMount />}
       <Routes>
         <Route element={<Layout />}>
           <Route index element={isMember ? <Dashboard /> : <Navigate to="/tasks" replace />} />
@@ -48,6 +52,8 @@ function Gate() {
               <Route path="games/pc/:deviceId" element={<PcDevices />} />
               <Route path="games/:gameId" element={<GameDetail />} />
               <Route path="team" element={<Team />} />
+              <Route path="connect" element={<Connect />} />
+              <Route path="this-pc" element={<ThisPc />} />
             </>
           )}
           <Route path="*" element={<Navigate to="/" replace />} />

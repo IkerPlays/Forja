@@ -55,8 +55,8 @@ export default function DeviceForm({ studioId, kind, device, onClose, onSaved }:
                   placeholder="K7M2QX" autoCapitalize="characters" autoComplete="off" style={{ letterSpacing: '.3em', fontWeight: 700, textTransform: 'uppercase' }} />
               </Field>
             )}
-            <p className="muted small">Lo de abajo solo sirve para el <em>mando</em> con el bridge local opcional.</p>
-            <details className="adv"><summary>Avanzado: mando por red local (bridge opcional)</summary>
+            <p className="muted small">Lo de abajo solo sirve para el <em>mando</em> con la app de escritorio.</p>
+            <details className="adv"><summary>Avanzado: mando por red local (app de escritorio)</summary>
             <Field label="IP de la 3DS en tu WiFi" hint="Ajustes → Internet → Ajustes de conexión.">
               <input value={ip} onChange={e => setIp(e.target.value)} placeholder="192.168.1.50" inputMode="decimal" />
             </Field>
@@ -71,7 +71,7 @@ export default function DeviceForm({ studioId, kind, device, onClose, onSaved }:
             </details>
           </>
         )}
-        {kind === 'pc' && <p className="muted small">Después de crearlo, abre Forja en ese PC → pestaña Archivos → <em>Elegir carpeta</em>. No hay que instalar nada.</p>}
+        {kind === 'pc' && <p className="muted small">Lo normal es no crearlo a mano: instala la <strong>app de escritorio</strong> y el PC se registra solo (Conectar → guía). Esto solo sirve para compartir una carpeta desde el navegador.</p>}
         <button className="btn primary" disabled={busy || (kind === '3ds' && !device && code.length < 6)}>{busy && <Loader2 size={14} className="spin" />} {device ? 'Guardar' : kind === '3ds' ? 'Vincular consola' : 'Añadir'}</button>
       </form>
     </Modal>

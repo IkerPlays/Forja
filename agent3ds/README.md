@@ -1,6 +1,6 @@
 # Forja3DS
 
-App homebrew (`.3dsx` / `.cia`) que conecta tu Nintendo 3DS con Forja **por internet**, sin PC, sin bridge y sin escribir contraseñas.
+App homebrew (`.3dsx` / `.cia`) que conecta tu Nintendo 3DS con Forja **por internet**, sin PC y sin escribir contraseñas.
 Descárgala desde la web (3DS → dispositivo → *Instalar / vincular la 3DS*) o desde GitHub → Releases → *forja3ds-latest*.
 
 ## Usar
@@ -30,5 +30,5 @@ Con [devkitPro](https://devkitpro.org) (devkitARM + libctru): `make` (.3dsx) y `
 Para apuntar a otra web: `make CFLAGS_EXTRA=...` o edita `DEFAULT_SITE` en `source/main.c`.
 
 ## Notas
-- La verificación del certificado TLS está desactivada (la 3DS no trae las CA actuales).
-- No controla botones ni pantalla de otros juegos: eso lo hace el bridge opcional o una app en la red local.
+
+- No controla botones ni pantalla de otros juegos: el mando y la pantalla táctil los envía la app de escritorio de Forja desde tu PC.

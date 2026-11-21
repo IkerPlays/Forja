@@ -35,7 +35,7 @@ Usa un proyecto de Supabase **propio de Forja** (no lo mezcles con otros).
 1. **Crear cuenta** → te pide crear tu **estudio**.
 2. **Equipo → Añadir** para dar acceso total a otras cuentas (si aún no tienen cuenta, entran solas al registrarse con ese correo).
 3. En un tablero: **Colaboradores** para invitar a alguien **solo a ese proyecto**.
-4. **3DS** → *Añadir* y sigue *¿Cómo conecto la 3DS?*; **Juegos → Mi PC** → *Añadir* y *Elegir carpeta* (ver [3DS.md](3DS.md)).
+4. **3DS** → *Añadir* y sigue *¿Cómo conecto la 3DS?*; **Juegos → Mi PC** → *Añadir* y *Elegir carpeta* (ver [CONEXIONES.md](CONEXIONES.md)).
 
 ## Notas
 

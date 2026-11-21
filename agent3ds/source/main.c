@@ -16,8 +16,13 @@
 #include <3ds.h>
 #include <citro2d.h>
 #include <dirent.h>
+#include <arpa/inet.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <malloc.h>
 #include <math.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -28,7 +33,7 @@
 
 #include "roots.h"
 
-#define VERSION "0.2.0"
+#define VERSION "0.3.0"
 #define CONFIG_PATH "sdmc:/3ds/forja/config.txt"
 #define SESSION_PATH "sdmc:/3ds/forja/session.txt"
 #ifndef DEFAULT_SITE
@@ -44,6 +49,9 @@ static char g_site[200], g_refresh[1024];
 static char g_token[4096];
 static time_t g_token_at = 0;
 static u32 g_last_status;
+static Result g_cfg_rc;          /* último fallo de red al leer la configuración */
+static int g_relay;             /* 1 = hablando con la app de escritorio por HTTP en la WiFi local */
+static u32 *g_soc_buf;
 static char g_last_err[120];
 
 /* ------------------------------------------------------------------ */
@@ -614,6 +622,7 @@ static int fetch_site_config(void) {
   snprintf(url, sizeof url, "%s/forja-config.json", g_site);
   Resp r;
   Result rc = http_do(HTTPC_METHOD_GET, url, NULL, NULL, 0, &r);
+  g_cfg_rc = rc;
   if (R_FAILED(rc)) { char m[120]; set_error("%s", rc_text(rc, m, sizeof m)); return 0; }
   int ok = r.status == 200 && json_get_str((char *)r.data, "url", g_url, sizeof g_url) &&
            json_get_str((char *)r.data, "anon", g_anon, sizeof g_anon);
@@ -827,6 +836,49 @@ static int pair_poll(void) {
   return 1;
 }
 
+/* Plan B sin TLS: busca la app de escritorio de Forja en la WiFi (UDP 8766, "FORJA?") y habla con ella en HTTP plano. */
+static int soc_up(void) {
+  if (g_soc_buf) return 1;
+  g_soc_buf = memalign(0x1000, 0x40000);
+  if (!g_soc_buf) return 0;
+  if (R_FAILED(socInit(g_soc_buf, 0x40000))) { free(g_soc_buf); g_soc_buf = NULL; return 0; }
+  return 1;
+}
+
+static int relay_discover(char *out, size_t cap) {
+  if (!soc_up()) return 0;
+  int s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+  if (s < 0) return 0;
+  int yes = 1;
+  setsockopt(s, SOL_SOCKET, SO_BROADCAST, &yes, sizeof yes);
+  fcntl(s, F_SETFL, fcntl(s, F_GETFL, 0) | O_NONBLOCK);
+  struct sockaddr_in a;
+  memset(&a, 0, sizeof a);
+  a.sin_family = AF_INET;
+  a.sin_port = htons(8766);
+  u32 me = (u32)gethostid();
+  const u32 targets[2] = {htonl(INADDR_BROADCAST), me | htonl(0xFFu)};
+  for (int attempt = 0; attempt < 4 && !g_quit; attempt++) {
+    for (int t = 0; t < 2; t++) {
+      a.sin_addr.s_addr = targets[t];
+      sendto(s, "FORJA?", 6, 0, (struct sockaddr *)&a, sizeof a);
+    }
+    for (int w = 0; w < 15 && !g_quit; w++) {
+      char buf[160];
+      struct sockaddr_in from;
+      socklen_t fl = sizeof from;
+      int n = recvfrom(s, buf, sizeof buf - 1, 0, (struct sockaddr *)&from, &fl);
+      if (n > 6) {
+        buf[n] = 0;
+        if (!strncmp(buf, "FORJA ", 6)) { snprintf(out, cap, "%s", buf + 6); close(s); return 1; }
+      }
+      svcSleepThread(100 * 1000 * 1000LL);
+    }
+  }
+  close(s);
+  return 0;
+}
+
 static void worker(void *arg) {
   (void)arg;
   snprintf(g_site, sizeof g_site, "%s", DEFAULT_SITE);
@@ -836,6 +888,7 @@ static void worker(void *arg) {
   if (R_FAILED(hrc)) set_error("httpc no disponible (%08lX)", (unsigned long)hrc);
 
   char dummy[8] = "";
+  int fails = 0;
   int cfg_ok = g_url[0] && g_anon[0], authed = 0;
   time_t last_beat = 0, last_try = 0, last_poll = 0;
 
@@ -849,6 +902,19 @@ static void worker(void *arg) {
         last_try = now;
         set_state(ST_CONFIG, "Leyendo la configuración de la web…");
         cfg_ok = fetch_site_config();
+        if (!cfg_ok && R_FAILED(g_cfg_rc) && (u32)g_cfg_rc != NO_NETWORK) {
+          /* HTTPS no funciona en esta consola: probar con la app de escritorio en la WiFi local */
+          set_state(ST_CONFIG, "HTTPS falló. Buscando la app de escritorio de Forja en tu WiFi…");
+          char base[100];
+          if (relay_discover(base, sizeof base)) {
+            snprintf(g_site, sizeof g_site, "%s", base);
+            g_relay = 1;
+            set_state(ST_CONFIG, "Puente local encontrado. Leyendo configuración…");
+            cfg_ok = fetch_site_config();
+          } else {
+            set_error("Sin HTTPS (%08lX) y no encuentro la app de escritorio de Forja en tu WiFi. Ábrela en tu PC (misma red).", (unsigned long)g_cfg_rc);
+          }
+        }
         if (!cfg_ok && g_state != ST_ERROR) set_error("No se pudo conectar con %s", g_site);
       }
     } else if (!authed) {
@@ -877,6 +943,7 @@ static void worker(void *arg) {
         snprintf(body, sizeof body, "{\"p_device\":\"%s\"}", g_device);
         Resp r;
         if (rpc("device_command_claim", body, &r)) {
+          fails = 0;
           if (g_state != ST_RUN) set_state(ST_RUN, "Conectada");
           const char *j = (const char *)r.data;
           while (*j == ' ' || *j == '\n') j++;
@@ -889,12 +956,17 @@ static void worker(void *arg) {
         } else {
           set_error("Sin respuesta del servidor");
           last_poll = time(NULL) + 8;   /* espera ~10 s antes de volver a intentarlo */
+          if (g_relay && ++fails >= 4) {   /* el PC cambió de IP o se cerró: volver a buscar */
+            fails = 0; cfg_ok = 0; authed = 0; g_relay = 0; g_url[0] = 0; g_anon[0] = 0;
+            snprintf(g_site, sizeof g_site, "%s", DEFAULT_SITE);
+          }
         }
       }
     }
     svcSleepThread(100 * 1000 * 1000LL);   /* 100 ms */
   }
   httpcExit();
+  if (g_soc_buf) socExit();
 }
 
 int main(void) {

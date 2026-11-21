@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Plus } from 'lucide-react'
 import { useStudio } from '../context/StudioContext'
 import { useDevices } from '../lib/useDevices'
@@ -34,7 +34,7 @@ export default function DevicesPage({ kind, base, title, sub, icon, dirActions }
           text={kind === '3ds'
             ? 'Verás sus archivos, jugarás con mando en pantalla y podrás ver su pantalla en directo.'
             : 'Navega por sus carpetas de juegos, mira su pantalla en directo y controla el ratón y el teclado.'}
-          action={<button className="btn primary" onClick={() => setAdding(true)}><Plus size={16} /> Añadir {kind === '3ds' ? 'una 3DS' : 'un PC'}</button>} />
+          action={<div className="row wrap"><button className="btn primary" onClick={() => setAdding(true)}><Plus size={16} /> Añadir {kind === '3ds' ? 'una 3DS' : 'un PC'}</button><Link className="btn" to="/connect">Ver guía de conexión</Link></div>} />
       ) : (
         <div className="devices-layout">
           {devices.length > 1 && (

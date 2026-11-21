@@ -51,7 +51,7 @@ export class CommandClient {
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.waiters.delete(id)
-        reject(new Error('El dispositivo no responde. ¿Está el bridge en marcha y conectado?'))
+        reject(new Error('El dispositivo no responde. ¿Está encendido y conectado (app de escritorio o Forja3DS)?'))
       }, timeoutMs)
       this.waiters.set(id, { resolve, reject, timer })
       this.startPolling()
@@ -72,43 +72,86 @@ export class CommandClient {
 export interface Signal { from: string; to?: string; kind: 'join' | 'offer' | 'answer' | 'ice' | 'leave'; data?: any }
 export type Role = 'viewer' | 'sharer' | 'bridge'
 
+export type Peer = { id: string; roles: Role[] }
+
+/** Un canal Realtime por dispositivo, compartido por todos los Link abiertos (el cliente no admite dos canales con el mismo tema). */
+interface Shared {
+  ch: RealtimeChannel
+  clientId: string
+  refs: Set<Link>
+  ready: Promise<void>
+  signalCbs: Set<(s: Signal) => void>
+  inputCbs: Set<(m: any) => void>
+  presenceCbs: Set<(peers: Peer[]) => void>
+  subscribed: boolean
+}
+const sharedLinks = new Map<string, Shared>()
+
+function openShared(deviceId: string): Shared {
+  const ex = sharedLinks.get(deviceId)
+  if (ex) return ex
+  const clientId = uid()
+  const ch = sb().channel(`device:${deviceId}`, {
+    config: { private: true, broadcast: { self: false, ack: false }, presence: { key: clientId } },
+  })
+  const sh: Shared = { ch, clientId, refs: new Set(), ready: Promise.resolve(), signalCbs: new Set(), inputCbs: new Set(), presenceCbs: new Set(), subscribed: false }
+  ch.on('broadcast', { event: 'signal' }, ({ payload }) => {
+    const s = payload as Signal
+    if (s.to && s.to !== clientId) return
+    sh.signalCbs.forEach(cb => cb(s))
+  })
+  ch.on('broadcast', { event: 'input' }, ({ payload }) => { sh.inputCbs.forEach(cb => cb(payload)) })
+  ch.on('presence', { event: 'sync' }, () => {
+    const state = ch.presenceState() as Record<string, { roles?: Role[] }[]>
+    const peers: Peer[] = Object.entries(state).map(([id, metas]) => ({ id, roles: metas[0]?.roles ?? [] }))
+    sh.presenceCbs.forEach(cb => cb(peers))
+  })
+  sh.ready = new Promise((resolve, reject) => {
+    ch.subscribe(async (status, err) => {
+      if (status === 'SUBSCRIBED') { sh.subscribed = true; await trackRoles(sh); resolve() }
+      else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+        reject(new Error(err?.message || 'No se pudo abrir el canal privado (¿ejecutaste 02_app.sql?)'))
+      }
+    })
+  })
+  sh.ready.catch(() => {})
+  sharedLinks.set(deviceId, sh)
+  return sh
+}
+
+async function trackRoles(sh: Shared) {
+  const roles = [...new Set([...sh.refs].flatMap(l => l.roles))]
+  if (sh.subscribed) await sh.ch.track({ roles })
+}
+
 export class Link {
-  readonly clientId = uid()
-  private ch: RealtimeChannel
-  private signalCbs = new Set<(s: Signal) => void>()
-  private presenceCbs = new Set<(peers: { id: string; role: Role }[]) => void>()
+  readonly roles: Role[]
+  private sh: Shared
+  private mine = { signal: new Set<(s: Signal) => void>(), input: new Set<(m: any) => void>(), presence: new Set<(p: Peer[]) => void>() }
   ready: Promise<void>
 
-  constructor(deviceId: string, private role: Role) {
-    this.ch = sb().channel(`device:${deviceId}`, {
-      config: { private: true, broadcast: { self: false, ack: false }, presence: { key: this.clientId } },
-    })
-    this.ch.on('broadcast', { event: 'signal' }, ({ payload }) => {
-      const s = payload as Signal
-      if (s.to && s.to !== this.clientId) return
-      this.signalCbs.forEach(cb => cb(s))
-    })
-    this.ch.on('presence', { event: 'sync' }, () => {
-      const state = this.ch.presenceState() as Record<string, { role: Role }[]>
-      const peers = Object.entries(state).map(([id, metas]) => ({ id, role: metas[0]?.role as Role }))
-      this.presenceCbs.forEach(cb => cb(peers))
-    })
-    this.ready = new Promise((resolve, reject) => {
-      this.ch.subscribe(async (status, err) => {
-        if (status === 'SUBSCRIBED') { await this.ch.track({ role: this.role }); resolve() }
-        else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-          reject(new Error(err?.message || 'No se pudo abrir el canal privado (¿ejecutaste 02_app.sql?)'))
-        }
-      })
-    })
+  constructor(private deviceId: string, roles: Role | Role[]) {
+    this.roles = Array.isArray(roles) ? roles : [roles]
+    this.sh = openShared(deviceId)
+    this.sh.refs.add(this)
+    this.ready = this.sh.ready.then(() => trackRoles(this.sh))
     this.ready.catch(() => {})
   }
+  get clientId() { return this.sh.clientId }
 
-  onSignal(cb: (s: Signal) => void) { this.signalCbs.add(cb); return () => { this.signalCbs.delete(cb) } }
-  onPresence(cb: (peers: { id: string; role: Role }[]) => void) { this.presenceCbs.add(cb); return () => { this.presenceCbs.delete(cb) } }
-  signal(s: Omit<Signal, 'from'>) { return this.ch.send({ type: 'broadcast', event: 'signal', payload: { ...s, from: this.clientId } }) }
-  input(payload: Record<string, unknown>) { return this.ch.send({ type: 'broadcast', event: 'input', payload }) }
-  close() { void sb().removeChannel(this.ch) }
+  onSignal(cb: (s: Signal) => void) { this.sh.signalCbs.add(cb); this.mine.signal.add(cb); return () => { this.sh.signalCbs.delete(cb); this.mine.signal.delete(cb) } }
+  onInput(cb: (m: any) => void) { this.sh.inputCbs.add(cb); this.mine.input.add(cb); return () => { this.sh.inputCbs.delete(cb); this.mine.input.delete(cb) } }
+  onPresence(cb: (peers: Peer[]) => void) { this.sh.presenceCbs.add(cb); this.mine.presence.add(cb); return () => { this.sh.presenceCbs.delete(cb); this.mine.presence.delete(cb) } }
+  signal(s: Omit<Signal, 'from'>) { return this.sh.ch.send({ type: 'broadcast', event: 'signal', payload: { ...s, from: this.sh.clientId } }) }
+  input(payload: Record<string, unknown>) { return this.sh.ch.send({ type: 'broadcast', event: 'input', payload }) }
+  close() {
+    this.mine.signal.forEach(cb => this.sh.signalCbs.delete(cb))
+    this.mine.input.forEach(cb => this.sh.inputCbs.delete(cb))
+    this.mine.presence.forEach(cb => this.sh.presenceCbs.delete(cb))
+    this.sh.refs.delete(this)
+    if (!this.sh.refs.size) { void sb().removeChannel(this.sh.ch); sharedLinks.delete(this.deviceId) }
+    else void trackRoles(this.sh)
+  }
 }
 
 export function iceServers(): RTCIceServer[] {
@@ -121,7 +164,7 @@ export function iceServers(): RTCIceServer[] {
 /* ------------------------------------------------------------------ *
  * Pantalla: quien comparte (PC o ventana del visor 3DS) → quien mira. *
  * ------------------------------------------------------------------ */
-class Peer {
+class Peer_ {
   pc: RTCPeerConnection
   private queue: RTCIceCandidateInit[] = []
   private hasRemote = false
@@ -143,9 +186,13 @@ class Peer {
 }
 
 export class ScreenSharer {
-  private peers = new Map<string, Peer>()
+  private peers = new Map<string, Peer_>()
   private off: () => void
-  constructor(private link: Link, private stream: MediaStream, private onViewers: (n: number) => void) {
+  private stream: MediaStream | null = null
+  private idle: ReturnType<typeof setTimeout> | null = null
+  /** `source` puede ser un MediaStream ya listo o una función que lo captura cuando llega el primer espectador. */
+  constructor(private link: Link, private source: MediaStream | (() => Promise<MediaStream>), private onViewers: (n: number) => void) {
+    if (!(typeof source === 'function')) this.stream = source
     this.off = link.onSignal(async s => {
       if (s.kind === 'join') await this.offerTo(s.from)
       else if (s.kind === 'answer') await this.peers.get(s.from)?.setRemote(s.data)
@@ -153,11 +200,18 @@ export class ScreenSharer {
       else if (s.kind === 'leave') this.drop(s.from)
     })
   }
+  private async ensureStream() {
+    if (this.stream) return this.stream
+    this.stream = await (this.source as () => Promise<MediaStream>)()
+    return this.stream
+  }
   private async offerTo(viewerId: string) {
     this.drop(viewerId)
-    const peer = new Peer(this.link, viewerId, st => { if (st === 'failed' || st === 'closed' || st === 'disconnected') this.drop(viewerId) })
+    if (this.idle) { clearTimeout(this.idle); this.idle = null }
+    const stream = await this.ensureStream()
+    const peer = new Peer_(this.link, viewerId, st => { if (st === 'failed' || st === 'closed' || st === 'disconnected') this.drop(viewerId) })
     this.peers.set(viewerId, peer)
-    this.stream.getTracks().forEach(t => peer.pc.addTrack(t, this.stream))
+    stream.getTracks().forEach(t => peer.pc.addTrack(t, stream))
     // Prioriza fluidez sobre nitidez cuando falta ancho de banda (juegos)
     peer.pc.getSenders().forEach(snd => {
       if (snd.track?.kind === 'video') {
@@ -173,16 +227,23 @@ export class ScreenSharer {
     await this.link.signal({ kind: 'offer', to: viewerId, data: offer })
     this.onViewers(this.peers.size)
   }
-  private drop(id: string) { this.peers.get(id)?.close(); this.peers.delete(id); this.onViewers(this.peers.size) }
+  private drop(id: string) {
+    this.peers.get(id)?.close(); this.peers.delete(id); this.onViewers(this.peers.size)
+    // Con captura bajo demanda, se libera la pantalla cuando ya nadie mira
+    if (!this.peers.size && typeof this.source === 'function' && this.stream && !this.idle) {
+      this.idle = setTimeout(() => { this.stream?.getTracks().forEach(t => t.stop()); this.stream = null; this.idle = null }, 15_000)
+    }
+  }
   stop() {
     this.off()
+    if (this.idle) clearTimeout(this.idle)
     for (const id of [...this.peers.keys()]) this.drop(id)
-    this.stream.getTracks().forEach(t => t.stop())
+    this.stream?.getTracks().forEach(t => t.stop())
   }
 }
 
 export class ScreenViewer {
-  private peer: Peer | null = null
+  private peer: Peer_ | null = null
   private off: () => void
   private offPresence: () => void
   private joined = false
@@ -193,7 +254,7 @@ export class ScreenViewer {
       else if (s.kind === 'leave' && this.peer?.remoteId === s.from) this.reset('El emisor dejó de compartir')
     })
     this.offPresence = link.onPresence(peers => {
-      const sharer = peers.find(p => p.role === 'sharer')
+      const sharer = peers.find(p => p.roles.includes('sharer'))
       if (sharer && !this.peer && !this.joined) { this.joined = true; this.onStatus('Conectando…'); void link.signal({ kind: 'join' }) }
       if (!sharer && this.peer) this.reset('Nadie está compartiendo pantalla')
       if (!sharer && !this.peer) { this.joined = false; this.onStatus('Nadie está compartiendo pantalla en este dispositivo') }
@@ -201,7 +262,7 @@ export class ScreenViewer {
   }
   private async accept(from: string, offer: RTCSessionDescriptionInit) {
     this.peer?.close()
-    const peer = new Peer(this.link, from, st => {
+    const peer = new Peer_(this.link, from, st => {
       if (st === 'connected') this.onStatus('En directo')
       if (st === 'failed') this.reset('Conexión fallida. Si no estáis en la misma red hace falta un servidor TURN.')
     })

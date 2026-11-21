@@ -10,3 +10,5 @@ bridge/.env
 bridge/.session.json
 *.tsbuildinfo
 public/forja-config.json
+desktop/node_modules
+desktop/dist
