@@ -15,8 +15,19 @@ jobs:
     container: devkitpro/devkitarm:latest
     steps:
       - uses: actions/checkout@v4
-      - name: Compilar
+      - name: Compilar .3dsx
         run: make -C agent3ds
+      - name: Herramientas para el .cia (makerom y bannertool)
+        run: |
+          apt-get update -qq && apt-get install -y -qq git build-essential cmake zlib1g-dev
+          git clone --depth 1 https://github.com/3DSGuy/Project_CTR /tmp/ctr
+          make -C /tmp/ctr/makerom -j"$(nproc)"
+          install -m755 /tmp/ctr/makerom/bin/makerom /usr/local/bin/makerom
+          git clone --depth 1 --recursive https://github.com/Steveice10/bannertool /tmp/bannertool
+          make -C /tmp/bannertool -j"$(nproc)"
+          install -m755 /tmp/bannertool/output/linux-x86_64/bannertool /usr/local/bin/bannertool
+      - name: Compilar .cia
+        run: make -C agent3ds cia
       # Los artefactos de Actions tienen cuota; las Releases no.
       - name: Publicar Release (forja3ds-latest)
         uses: softprops/action-gh-release@v2
@@ -24,7 +35,8 @@ jobs:
           tag_name: forja3ds-latest
           name: Forja3DS (última versión)
           prerelease: true
-          body: App homebrew para la 3DS. Copia Forja3DS.3dsx a /3ds/ en la SD.
+          body: App homebrew para la 3DS. .3dsx = Homebrew Launcher (/3ds/ en la SD); .cia = instalable con FBI.
           files: |
             agent3ds/Forja3DS.3dsx
+            agent3ds/Forja3DS.cia
             agent3ds/Forja3DS.smdh

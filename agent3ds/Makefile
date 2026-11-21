@@ -17,6 +17,9 @@ export PATH := $(DEVKITPRO)/tools/bin:$(DEVKITARM)/bin:$(PATH)
 
 all: $(TARGET).3dsx
 
+# .cia (instalable con FBI): requiere makerom y bannertool en el PATH
+cia: $(TARGET).cia
+
 $(TARGET).elf: source/main.c
 	$(CC) $(CFLAGS) $< $(LDFLAGS) $(LIBS) -o $@
 
@@ -26,7 +29,13 @@ $(TARGET).smdh: icon.png
 $(TARGET).3dsx: $(TARGET).elf $(TARGET).smdh
 	3dsxtool $(TARGET).elf $@ --smdh=$(TARGET).smdh
 
-clean:
-	rm -f $(TARGET).elf $(TARGET).3dsx $(TARGET).smdh $(TARGET).map
+banner.bnr: cia/banner.png cia/audio.wav
+	bannertool makebanner -i cia/banner.png -a cia/audio.wav -o $@
 
-.PHONY: all clean
+$(TARGET).cia: $(TARGET).elf $(TARGET).smdh banner.bnr cia/app.rsf
+	makerom -f cia -o $@ -elf $(TARGET).elf -rsf cia/app.rsf -icon $(TARGET).smdh -banner banner.bnr -exefslogo -target t
+
+clean:
+	rm -f $(TARGET).elf $(TARGET).3dsx $(TARGET).smdh $(TARGET).cia $(TARGET).map banner.bnr
+
+.PHONY: all cia clean
