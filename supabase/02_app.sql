@@ -589,6 +589,36 @@ begin
   return v_now;
 end $$;
 
+
+-- Agentes sin bridge (app homebrew de la 3DS y pestaña del navegador en el PC):
+-- reclaman la siguiente orden y devuelven el resultado, todo con la sesión del usuario.
+create or replace function public.device_command_claim(p_device uuid)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  c public.device_commands%rowtype;
+begin
+  if not public.can_access_device(p_device) then raise exception 'sin permiso'; end if;
+  select * into c from public.device_commands
+   where device_id = p_device and status = 'pending' and created_at > now() - interval '10 minutes'
+   order by created_at limit 1 for update skip locked;
+  if c.id is null then return null; end if;
+  update public.device_commands set status = 'running' where id = c.id;
+  return jsonb_strip_nulls(jsonb_build_object(
+    'id', c.id, 'studio_id', c.studio_id, 'type', c.type,
+    'path', c.payload->>'path', 'to', c.payload->>'to', 'storage', c.payload->>'storage',
+    'parts', (c.payload->>'parts')::int, 'size', (c.payload->>'size')::bigint, 'kind', c.payload->>'type'));
+end $$;
+
+create or replace function public.device_command_finish(
+  p_id uuid, p_status text, p_result jsonb default null, p_error text default null)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if p_status not in ('done','error') then raise exception 'estado no válido'; end if;
+  update public.device_commands
+     set status = p_status, result = p_result, error = left(p_error, 400), finished_at = now()
+   where id = p_id and public.can_access_device(device_id);
+end $$;
+
 -- ---------------------------------------------------------------------
 -- 4 · VISTA DE PROGRESO (Tareas ↔ Juegos)
 -- ---------------------------------------------------------------------
@@ -773,7 +803,8 @@ begin
     'is_studio_member(uuid)','is_studio_admin(uuid)','is_project_member(uuid)','can_access_project(uuid)','can_edit_project(uuid)',
     'can_access_device(uuid)','shares_context(uuid)','rt_topic_allowed(text)',
     'create_studio(text)','invite_to_studio(uuid,text,text)','invite_to_project(uuid,text,text)',
-    'claim_invites()','create_project_for_game(uuid)','device_heartbeat(uuid,jsonb)'
+    'claim_invites()','create_project_for_game(uuid)','device_heartbeat(uuid,jsonb)',
+    'device_command_claim(uuid)','device_command_finish(uuid,text,jsonb,text)'
   ] loop
     execute format('revoke all on function public.%s from public, anon', f);
     execute format('grant execute on function public.%s to authenticated', f);

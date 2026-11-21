@@ -4,6 +4,7 @@ import { sb } from '../lib/supabase'
 import { CommandClient } from '../lib/devices'
 import type { Device, FileEntry } from '../lib/types'
 import { errMsg, formatBytes, uid } from '../lib/util'
+import { downloadChunked, uploadChunked, usesChunks } from '../lib/transfer'
 import { useToast } from './ui'
 
 const join = (a: string, b: string) => (a.endsWith('/') ? a : a + '/') + b
@@ -37,6 +38,10 @@ export default function FileBrowser({ device, client, startPath = '/', dirAction
   async function download(e: FileEntry) {
     const full = join(path, e.name)
     setBusy(`Preparando ${e.name}…`)
+    if (usesChunks(device)) {
+      try { await downloadChunked(client, full, e.name, setBusy) } catch (er) { toast(errMsg(er), 'err') } finally { setBusy(null) }
+      return
+    }
     try {
       const res = await client.run<{ storage: string }>('get_file', { path: full }, 180_000)
       const { data, error } = await sb().storage.from('transfers').createSignedUrl(res.storage, 120, { download: e.name })
@@ -50,6 +55,11 @@ export default function FileBrowser({ device, client, startPath = '/', dirAction
     for (const f of Array.from(files)) {
       if (f.size > 50 * 1024 * 1024) { toast(`${f.name}: máximo 50 MB por archivo`, 'err'); continue }
       setBusy(`Subiendo ${f.name}…`)
+      if (usesChunks(device)) {
+        try { await uploadChunked(client, device, f, join(path, f.name), setBusy); toast(`${f.name} enviado`) }
+        catch (er) { toast(errMsg(er), 'err') }
+        continue
+      }
       const key = `${device.studio_id}/${device.id}/${uid()}-${f.name.replace(/[^\w.\- ]/g, '_')}`
       try {
         const up = await sb().storage.from('transfers').upload(key, f, { upsert: false })

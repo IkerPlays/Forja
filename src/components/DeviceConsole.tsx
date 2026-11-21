@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Activity, FolderOpen, Gamepad2, MonitorPlay, Settings2, Terminal, Trash2, Copy } from 'lucide-react'
-import { sb } from '../lib/supabase'
+import { Activity, FolderOpen, Gamepad2, MonitorPlay, Settings2, Terminal, Trash2, Copy, Download } from 'lucide-react'
+import { sb, readConfig } from '../lib/supabase'
+import { useAuth } from '../context/AuthContext'
+import PcFolderPanel from './PcFolderPanel'
 import { CommandClient, Link } from '../lib/devices'
 import type { Device, FileEntry } from '../lib/types'
 import type { PadState } from '../lib/pad'
@@ -32,12 +34,14 @@ export default function DeviceConsole({ device, onChanged, onDeleted, startPath,
   const needsLink = tab === 'play' || tab === 'screen'
   const [link, setLink] = useState<Link | null>(null)
   const [linkErr, setLinkErr] = useState<string | null>(null)
+  const [hasBridge, setHasBridge] = useState(false)
   useEffect(() => {
     if (!needsLink) return
     const l = new Link(device.id, 'viewer')
     setLinkErr(null)
+    const off = l.onPresence(peers => setHasBridge(peers.some(p => p.role === 'bridge')))
     l.ready.then(() => setLink(l)).catch(e => setLinkErr(errMsg(e)))
-    return () => { l.close(); setLink(null) }
+    return () => { off(); l.close(); setLink(null); setHasBridge(false) }
   }, [device.id, needsLink])
 
   // Mando → bridge (a ~60 Hz como máximo)
@@ -73,10 +77,10 @@ export default function DeviceConsole({ device, onChanged, onDeleted, startPath,
         <div>
           <h2><StatusDot online={online} /> {device.name}</h2>
           <small className="muted">
-            {is3ds ? `Nintendo 3DS · ${cfg.ip || 'sin IP'}` : 'PC'} · {online ? 'bridge conectado' : device.last_seen ? `bridge visto ${timeAgo(device.last_seen)}` : 'bridge sin conectar nunca'}
+            {is3ds ? `Nintendo 3DS · ${cfg.ip || 'sin IP'}` : 'PC'} · {online ? 'conectado' : device.last_seen ? `visto ${timeAgo(device.last_seen)}` : 'nunca conectado'}
           </small>
         </div>
-        {!online && <button className="btn sm" onClick={() => setHelp(true)}><Terminal size={14} /> ¿Cómo conecto el bridge?</button>}
+        {!online && is3ds && <button className="btn sm" onClick={() => setHelp(true)}><Terminal size={14} /> ¿Cómo conecto la 3DS?</button>}
       </div>
 
       <div className="tabs">
@@ -89,33 +93,45 @@ export default function DeviceConsole({ device, onChanged, onDeleted, startPath,
             {linkErr ? <div className="callout error">{linkErr}</div> : link ? (
               <>
                 <ScreenView link={link} kind="3ds" />
-                <Gamepad3DS onChange={sendPad} />
+                <div>
+                  {!hasBridge && (
+                    <div className="callout">
+                      <strong>El mando necesita un enlace local.</strong> Un navegador no puede enviar los botones a la 3DS por tu WiFi
+                      (usa UDP). Si quieres controlarla desde aquí, ejecuta el bridge opcional en un PC de tu red
+                      (<code>docs/3DS.md</code>). Archivos y pantalla funcionan sin él.
+                    </div>
+                  )}
+                  <div className={hasBridge ? '' : 'pad-off'}><Gamepad3DS onChange={sendPad} /></div>
+                </div>
               </>
             ) : <div className="center-fill muted">Abriendo canal en tiempo real…</div>}
           </div>
         )}
         {tab === 'screen' && (
           linkErr ? <div className="callout error">{linkErr}</div> : link
-            ? <ScreenView link={link} kind="pc" remoteControl />
+            ? <ScreenView link={link} kind="pc" remoteControl={hasBridge} />
             : <div className="center-fill muted">Abriendo canal en tiempo real…</div>
         )}
         {tab === 'files' && (
-          !online && is3ds === false ? <OfflineHint onHelp={() => setHelp(true)} /> :
-          <FileBrowser device={device} client={client} startPath={startPath} dirActions={dirActions} />
+          <>
+            {!is3ds && <PcFolderPanel deviceId={device.id} />}
+            {is3ds && !online && <OfflineHint onHelp={() => setHelp(true)} />}
+            {(is3ds || online) && <FileBrowser device={device} client={client} startPath={startPath} dirActions={dirActions} />}
+          </>
         )}
         {tab === 'setup' && (
           <div className="stack">
             <div className="callout">
               <h4><Activity size={15} /> Estado</h4>
-              <p>{online ? 'El bridge está conectado y atendiendo este dispositivo.' : 'El bridge no está conectado. Los archivos, el mando y el control no funcionarán hasta que lo ejecutes.'}</p>
+              <p>{online ? 'El dispositivo está conectado y atendiendo órdenes.' : is3ds ? 'La 3DS no está conectada: abre la app Forja3DS en la consola (con WiFi).' : 'Este PC no está compartiendo: abre Forja en él, pestaña Archivos, y elige una carpeta.'}</p>
               <div className="row wrap">
-                <button className="btn" onClick={() => setHelp(true)}><Terminal size={15} /> Instrucciones del bridge</button>
+                {is3ds && <button className="btn" onClick={() => setHelp(true)}><Terminal size={15} /> Instrucciones de la 3DS</button>}
                 <button className="btn" onClick={() => setEditing(true)}><Settings2 size={15} /> Editar datos</button>
                 <button className="btn danger" onClick={remove}><Trash2 size={15} /> Eliminar</button>
               </div>
             </div>
             {Object.keys(device.info).length > 0 && (
-              <div className="callout"><h4>Información del equipo del bridge</h4>
+              <div className="callout"><h4>Información del dispositivo</h4>
                 <dl className="kv">{Object.entries(device.info).map(([k, v]) => <div key={k}><dt>{k}</dt><dd>{String(v)}</dd></div>)}</dl></div>
             )}
           </div>
@@ -123,32 +139,43 @@ export default function DeviceConsole({ device, onChanged, onDeleted, startPath,
       </div>
 
       {editing && <DeviceForm studioId={device.studio_id} kind={device.kind} device={device} onClose={() => setEditing(false)} onSaved={() => { setEditing(false); onChanged() }} />}
-      {help && <BridgeHelp device={device} onClose={() => setHelp(false)} />}
+      {help && <AgentHelp device={device} onClose={() => setHelp(false)} />}
     </div>
   )
 }
 
 function OfflineHint({ onHelp }: { onHelp: () => void }) {
-  return <div className="callout">El bridge de este PC no está conectado, así que no se pueden ver sus archivos. <button className="link-btn" onClick={onHelp}>Ver cómo arrancarlo</button></div>
+  return <div className="callout">La 3DS no está conectada, así que no se pueden ver sus archivos. Abre <strong>Forja3DS</strong> en la consola. <button className="link-btn" onClick={onHelp}>Ver cómo instalarla</button></div>
 }
 
-function BridgeHelp({ device, onClose }: { device: Device; onClose: () => void }) {
-  const toast = useToast()
-  const cmd = `node --env-file=.env src/index.mjs ${device.id}`
-  const copy = (t: string) => { void navigator.clipboard.writeText(t).then(() => toast('Copiado')) }
+/** config.txt listo para la tarjeta SD: ya lleva la URL, la clave pública y el ID de este dispositivo. */
+function AgentHelp({ device, onClose }: { device: Device; onClose: () => void }) {
+  const { profile } = useAuth()
+  const cfg = readConfig()
+  const text = [
+    '# Forja3DS — copia este archivo a la tarjeta SD en /3ds/forja/config.txt',
+    `url=${cfg.url}`, `anon=${cfg.key}`,
+    '# Cuenta de Forja que usará la consola (recomendado: una cuenta propia para la 3DS, añadida al estudio en Equipo)',
+    `email=${profile?.email ?? ''}`, 'password=', `device=${device.id}`, '',
+  ].join('\n')
+  const download = () => {
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(new Blob([text], { type: 'text/plain' })); a.download = 'config.txt'
+    document.body.appendChild(a); a.click(); a.remove()
+  }
   return (
-    <Modal title="Conectar el bridge" onClose={onClose} wide>
+    <Modal title="Conectar la 3DS (sin PC)" onClose={onClose} wide>
       <div className="stack">
         <p className="muted">
-          El <strong>bridge</strong> es un programita (carpeta <code>bridge/</code> del repositorio) que corre en tu PC.
-          Hace de puente entre Forja y {device.kind === '3ds' ? 'tu 3DS (por tu red WiFi)' : 'los archivos y el ratón/teclado de ese PC'}.
+          <strong>Forja3DS</strong> es una app homebrew que se conecta <em>desde la consola</em> a internet (WiFi) y habla con Forja.
+          No necesitas ordenador ni estar en la misma red que la tablet.
         </p>
         <ol className="steps">
-          <li>En el PC: <code>cd bridge &amp;&amp; npm install</code></li>
-          <li>Copia <code>.env.example</code> a <code>.env</code> y rellena tu URL/clave de Supabase y tu correo/contraseña de Forja{device.kind === 'pc' ? ' y las carpetas que quieres exponer (PC_ROOTS)' : ''}.</li>
-          <li>Arranca: <button className="code-copy" onClick={() => copy(cmd)}><code>{cmd}</code> <Copy size={13} /></button></li>
+          <li>Descarga <code>Forja3DS.3dsx</code> (GitHub → Actions → <em>Build Forja3DS</em> → artefacto, o la última Release) y cópiala a la SD en <code>/3ds/</code>.</li>
+          <li>Descarga este <code>config.txt</code>, <strong>escribe la contraseña</strong> y cópialo a la SD en <code>/3ds/forja/config.txt</code>. <button className="btn sm" onClick={download}><Download size={14} /> config.txt</button></li>
+          <li>En la 3DS abre <strong>Forja3DS</strong> desde el Homebrew Launcher. Cuando aparezca «Conectado», el punto de aquí se pone verde.</li>
         </ol>
-        {device.kind === '3ds' && <p className="muted small">En la 3DS abre <strong>ftpd</strong> (archivos) y activa <em>Input Redirection</em> en el menú Rosalina de Luma3DS (mando). Detalles en <code>docs/3DS.md</code>.</p>}
+        <p className="muted small">La cuenta debe ser miembro del estudio. Lo ideal es crear una cuenta solo para la consola (Equipo → Añadir) y usar esa en <code>config.txt</code>, para no dejar tu contraseña personal en la SD.</p>
         <p className="muted small">ID del dispositivo: <code>{device.id}</code></p>
       </div>
     </Modal>
