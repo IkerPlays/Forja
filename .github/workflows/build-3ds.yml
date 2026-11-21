@@ -15,6 +15,9 @@ jobs:
     container: devkitpro/devkitarm:latest
     steps:
       - uses: actions/checkout@v4
+      - name: Asegurar citro2d/citro3d
+        run: |
+          ls $DEVKITPRO/libctru/lib | grep -E 'citro' || dkp-pacman -Sy --noconfirm citro2d citro3d || dkp-pacman -Sy --noconfirm 3ds-dev
       - name: Compilar .3dsx
         run: make -C agent3ds
       - name: Herramientas para el .cia (makerom y bannertool)

@@ -9,9 +9,9 @@ TARGET := Forja3DS
 CC     := $(DEVKITARM)/bin/arm-none-eabi-gcc
 ARCH   := -march=armv6k -mtune=mpcore -mfloat-abi=hard -mtp=soft
 CFLAGS := -g -Wall -O2 -mword-relocations -fomit-frame-pointer -ffunction-sections $(ARCH) \
-          -I$(CTRULIB)/include -D__3DS__ -std=gnu11
-LDFLAGS := -specs=3dsx.specs -g $(ARCH) -Wl,-Map,$(TARGET).map -L$(CTRULIB)/lib
-LIBS   := -lctru -lm
+          -I$(CTRULIB)/include -I$(DEVKITPRO)/portlibs/3ds/include -D__3DS__ -std=gnu11
+LDFLAGS := -specs=3dsx.specs -g $(ARCH) -Wl,-Map,$(TARGET).map -L$(CTRULIB)/lib -L$(DEVKITPRO)/portlibs/3ds/lib
+LIBS   := -lcitro2d -lcitro3d -lctru -lm
 
 export PATH := $(DEVKITPRO)/tools/bin:$(DEVKITARM)/bin:$(PATH)
 
@@ -20,7 +20,7 @@ all: $(TARGET).3dsx
 # .cia (instalable con FBI): requiere makerom y bannertool en el PATH
 cia: $(TARGET).cia
 
-$(TARGET).elf: source/main.c
+$(TARGET).elf: source/main.c source/roots.h
 	$(CC) $(CFLAGS) $< $(LDFLAGS) $(LIBS) -o $@
 
 $(TARGET).smdh: icon.png

@@ -1,22 +1,24 @@
 /*
  * Forja3DS — agente homebrew para Nintendo 3DS.
  *
- * Se conecta a internet (WiFi) y habla con tu proyecto de Supabase usando una cuenta de Forja:
- *   · inicia sesión con email/contraseña (GoTrue),
- *   · avisa de que está vivo (RPC device_heartbeat),
- *   · reclama órdenes (RPC device_command_claim) y devuelve resultados (device_command_finish),
- *   · mueve archivos por trozos de 1 MB a través de Supabase Storage (bucket "transfers").
+ * Se conecta a internet (WiFi) y habla con tu proyecto de Supabase:
+ *   · lee la URL y la clave PÚBLICAS de la web (/forja-config.json) — sin config.txt,
+ *   · entra con una cuenta anónima y se EMPAREJA con un código que escribes en la web,
+ *   · avisa de que está viva (device_heartbeat), reclama órdenes (device_command_claim)
+ *     y devuelve resultados (device_command_finish),
+ *   · mueve archivos por trozos a través de Supabase Storage (bucket "transfers").
  * Así la web puede ver y gestionar la tarjeta SD sin PC ni "bridge", desde cualquier red.
  *
- * Sin configuración: lee la URL/clave públicas de la web (/forja-config.json), entra con una cuenta
- * anónima y se empareja con un CÓDIGO que se introduce en la web (como las apps de TV).
- * Opcional: sdmc:/3ds/forja/config.txt (site=, url=, anon=; o email/password/device para el modo clásico).
+ * Interfaz gráfica con citro2d; toda la red va en un hilo aparte para que la pantalla no se congele.
+ * Opcional: sdmc:/3ds/forja/config.txt (site=, url=, anon=; o email/password/device = modo clásico).
  * La sesión se guarda en sdmc:/3ds/forja/session.txt.
  */
 #include <3ds.h>
-#include <stdarg.h>
+#include <citro2d.h>
 #include <dirent.h>
 #include <errno.h>
+#include <math.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -24,54 +26,98 @@
 #include <time.h>
 #include <unistd.h>
 
-#define VERSION "0.1.0"
+#include "roots.h"
+
+#define VERSION "0.2.0"
 #define CONFIG_PATH "sdmc:/3ds/forja/config.txt"
 #define SESSION_PATH "sdmc:/3ds/forja/session.txt"
 #ifndef DEFAULT_SITE
 #define DEFAULT_SITE "https://forja-hub.netlify.app"
 #endif
-#define PART_SIZE (1024 * 1024)
+#define PART_SIZE (256 * 1024)   /* trozo al subir al servidor (la web acepta cualquier tamaño) */
 #define MAX_FILE (50u * 1024u * 1024u)
 #define MAX_ENTRIES 2000
+#define NO_NETWORK 0xD8A0A046u
 
 static char g_url[256], g_anon[512], g_email[160], g_pass[160], g_device[64];
-static char g_site[200], g_refresh[1024], g_code[16];
+static char g_site[200], g_refresh[1024];
 static char g_token[4096];
+static time_t g_token_at = 0;
 static u32 g_last_status;
 static char g_last_err[120];
-static time_t g_token_at = 0;
-static char g_status[160] = "Iniciando…";
 
 /* ------------------------------------------------------------------ */
-/* Pantalla                                                            */
+/* Estado compartido hilo de red <-> interfaz                          */
 /* ------------------------------------------------------------------ */
-static PrintConsole g_top, g_bottom;
+typedef enum { ST_BOOT, ST_CONFIG, ST_AUTH, ST_PAIR, ST_RUN, ST_ERROR } State;
+typedef struct { char text[64]; int result; /* 0 en curso, 1 ok, 2 error */ } Act;
 
-static void ui_redraw(const char *last) {
-  consoleSelect(&g_top);
-  printf("\x1b[2J\x1b[1;1H");
-  printf("\x1b[33m Forja3DS " VERSION "\x1b[0m\n");
-  printf(" ------------------------------------\n");
-  printf(" Estado: %s\n\n", g_status);
-  if (g_code[0] && !g_device[0]) {
-    printf("\x1b[36m  CODIGO DE VINCULACION\x1b[0m\n\n");
-    printf("\x1b[1;33m      %s\x1b[0m\n\n", g_code);
-    printf(" En Forja (web): 3DS > Anadir\n y escribe este codigo.\n");
-  } else {
-    printf(" Servidor: %.38s\n", g_url[0] ? g_url : g_site);
-    printf(" Dispositivo: %.8s...\n\n", g_device[0] ? g_device : "(sin vincular)");
-    printf(" Ultima orden:\n  %.40s\n", last && *last ? last : "-");
-  }
-  printf("\n\n START = salir\n");
-  gfxFlushBuffers();
+static LightLock g_lock;
+static State g_state = ST_BOOT;
+static char g_status[200] = "Iniciando…";
+static char g_code[16];
+static Act g_acts[5];
+static int g_nacts, g_done;
+static char g_prog_label[48];
+static int g_prog_up, g_prog_cur, g_prog_total;
+static u32 g_diag[2] = {0xFFFFFFFFu, 0xFFFFFFFFu};   /* A: sin verificar, B: con CAs; FFFFFFFF = sin probar */
+static volatile int g_quit;
+
+static void set_state(State s, const char *msg) {
+  LightLock_Lock(&g_lock);
+  g_state = s;
+  if (msg) snprintf(g_status, sizeof g_status, "%s", msg);
+  LightLock_Unlock(&g_lock);
 }
-
 static void set_status(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 static void set_status(const char *fmt, ...) {
-  va_list ap;
-  va_start(ap, fmt);
-  vsnprintf(g_status, sizeof g_status, fmt, ap);
-  va_end(ap);
+  char tmp[200];
+  va_list ap; va_start(ap, fmt); vsnprintf(tmp, sizeof tmp, fmt, ap); va_end(ap);
+  LightLock_Lock(&g_lock);
+  snprintf(g_status, sizeof g_status, "%s", tmp);
+  if (g_state != ST_PAIR && g_state != ST_RUN) g_state = ST_BOOT;
+  LightLock_Unlock(&g_lock);
+}
+static void set_error(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+static void set_error(const char *fmt, ...) {
+  char tmp[200];
+  va_list ap; va_start(ap, fmt); vsnprintf(tmp, sizeof tmp, fmt, ap); va_end(ap);
+  set_state(ST_ERROR, tmp);
+}
+static const char *rc_text(Result rc, char *buf, size_t cap) {
+  if ((u32)rc == 0xD8A0A046u) snprintf(buf, cap, "Sin conexión a internet. Comprueba el WiFi de la consola.");
+  else snprintf(buf, cap, "No se pudo conectar (código %08lX)", (unsigned long)rc);
+  return buf;
+}
+static const char *friendly(const char *type) {
+  if (!strcmp(type, "list_dir")) return "Listar carpeta";
+  if (!strcmp(type, "get_file")) return "Enviar archivo";
+  if (!strcmp(type, "put_file")) return "Recibir archivo";
+  if (!strcmp(type, "mkdir")) return "Crear carpeta";
+  if (!strcmp(type, "rename")) return "Renombrar";
+  if (!strcmp(type, "delete")) return "Eliminar";
+  return type;
+}
+static void act_begin(const char *type, const char *path) {
+  LightLock_Lock(&g_lock);
+  for (int i = 4; i > 0; i--) g_acts[i] = g_acts[i - 1];
+  snprintf(g_acts[0].text, sizeof g_acts[0].text, "%s  %s", friendly(type), path);
+  g_acts[0].result = 0;
+  if (g_nacts < 5) g_nacts++;
+  LightLock_Unlock(&g_lock);
+}
+static void act_end(int ok) {
+  LightLock_Lock(&g_lock);
+  g_acts[0].result = ok ? 1 : 2;
+  g_done++;
+  LightLock_Unlock(&g_lock);
+}
+/* up=1 subiendo (3DS → web), up=0 recibiendo; label NULL = sin transferencia */
+static void set_progress(const char *label, int up, int cur, int total) {
+  LightLock_Lock(&g_lock);
+  if (!label) { g_prog_total = 0; g_prog_label[0] = 0; }
+  else { snprintf(g_prog_label, sizeof g_prog_label, "%s", label); g_prog_up = up; g_prog_cur = cur; g_prog_total = total; }
+  LightLock_Unlock(&g_lock);
 }
 
 /* ------------------------------------------------------------------ */
@@ -197,14 +243,23 @@ typedef struct { u8 *data; size_t len; u32 status; } Resp;
 
 static void resp_free(Resp *r) { free(r->data); r->data = NULL; r->len = 0; }
 
+/* Modo TLS: 0 = sin verificar el certificado (lo habitual en homebrew); 1 = confiar en CAs raíz incluidas.
+ * Si un modo falla se prueba el otro y se recuerda el que funcione. */
+static int g_tls_mode = 0;
+
 /* hdrs: pares nombre,valor terminados en NULL */
-static Result http_do(HTTPC_RequestMethod method, const char *url, const char *const *hdrs,
-                      const void *body, u32 body_len, Resp *out) {
+static Result http_once(HTTPC_RequestMethod method, const char *url, const char *const *hdrs,
+                        const void *body, u32 body_len, Resp *out, int mode) {
   memset(out, 0, sizeof *out);
   httpcContext ctx;
   Result rc = httpcOpenContext(&ctx, method, url, 1);
   if (R_FAILED(rc)) return rc;
-  httpcSetSSLOpt(&ctx, SSLCOPT_DisableVerify);   /* la 3DS no trae las CA modernas */
+  if (mode == 0) {
+    httpcSetSSLOpt(&ctx, SSLCOPT_DisableVerify);
+  } else {
+    for (unsigned i = 0; i < sizeof g_roots / sizeof g_roots[0]; i++)
+      httpcAddTrustedRootCA(&ctx, g_roots[i].der, g_roots[i].size);
+  }
   httpcSetKeepAlive(&ctx, HTTPC_KEEPALIVE_ENABLED);
   httpcAddRequestHeaderField(&ctx, "User-Agent", "Forja3DS/" VERSION);
   for (int i = 0; hdrs && hdrs[i]; i += 2) httpcAddRequestHeaderField(&ctx, hdrs[i], hdrs[i + 1]);
@@ -233,6 +288,21 @@ static Result http_do(HTTPC_RequestMethod method, const char *url, const char *c
   out->data[out->len] = 0;
   httpcCloseContext(&ctx);
   return R_FAILED(rc) ? rc : 0;
+}
+
+static Result http_do(HTTPC_RequestMethod method, const char *url, const char *const *hdrs,
+                      const void *body, u32 body_len, Resp *out) {
+  int first = g_tls_mode;
+  Result rc = http_once(method, url, hdrs, body, body_len, out, first);
+  g_diag[first] = R_FAILED(rc) ? (u32)rc : 0;
+  if (R_FAILED(rc) && (u32)rc != NO_NETWORK) {
+    resp_free(out);
+    Result rc2 = http_once(method, url, hdrs, body, body_len, out, !first);
+    g_diag[!first] = R_FAILED(rc2) ? (u32)rc2 : 0;
+    if (R_SUCCEEDED(rc2)) { g_tls_mode = !first; return 0; }
+    resp_free(out);
+  }
+  return rc;
 }
 
 /* ---- sesión ---- */
@@ -267,14 +337,14 @@ static int auth_call(const char *path, const char *body) {
   Resp r;
   Result rc = http_do(HTTPC_METHOD_POST, url, hdrs, body, (u32)strlen(body), &r);
   g_last_status = 0;
-  if (R_FAILED(rc)) { set_status("Sin conexion (%08lX)", (unsigned long)rc); return 0; }
+  if (R_FAILED(rc)) { char m[120]; set_error("%s", rc_text(rc, m, sizeof m)); return 0; }
   g_last_status = r.status;
   if (r.status != 200) {
     char msg[100] = "";
     json_get_str((char *)r.data, "msg", msg, sizeof msg);
     if (!msg[0]) json_get_str((char *)r.data, "error_description", msg, sizeof msg);
-    if (strstr(msg, "nonymous")) set_status("Activa 'Allow anonymous sign-ins' en Supabase");
-    else set_status("Login %lu: %.60s", (unsigned long)r.status, msg);
+    if (strstr(msg, "nonymous")) set_error("Activa «Allow anonymous sign-ins» en Supabase (Authentication → Providers)");
+    else set_error("Error de inicio de sesión (%lu): %.60s", (unsigned long)r.status, msg);
     resp_free(&r);
     return 0;
   }
@@ -285,7 +355,7 @@ static int auth_call(const char *path, const char *body) {
     save_session();                      /* el refresh token rota en cada uso: guardarlo siempre */
   }
   resp_free(&r);
-  if (!ok) { set_status("Respuesta de login no valida"); return 0; }
+  if (!ok) { set_error("Respuesta de inicio de sesión no válida"); return 0; }
   g_token_at = time(NULL);
   return 1;
 }
@@ -404,14 +474,14 @@ static int cmd_get_file(const char *vpath, const char *studio, const char *cmd_i
     size_t n = fread(chunk, 1, PART_SIZE, f);
     char path[400];
     snprintf(path, sizeof path, "/storage/v1/object/transfers/%s/%s/%s.p%d", studio, g_device, cmd_id, i);
-    set_status("Subiendo %.20s %d/%d", base_name(p), i + 1, parts);
-    ui_redraw(NULL);
+    set_progress(base_name(p), 1, i, parts);
     Resp r;
     Result rc = api(HTTPC_METHOD_POST, path, "application/octet-stream", chunk, (u32)n, &r);
     if (R_FAILED(rc) || r.status >= 300) { snprintf(err, errcap, "Fallo al subir (HTTP %lu)", R_FAILED(rc) ? 0UL : (unsigned long)r.status); ok = 0; }
     if (!R_FAILED(rc)) resp_free(&r);
   }
   free(chunk); fclose(f);
+  set_progress(NULL, 0, 0, 0);
   if (!ok) return 0;
   buf_printf(res, "{\"storage\":\"%s/%s/%s\",\"parts\":%d,\"size\":%lld}", studio, g_device, cmd_id, parts, (long long)st.st_size);
   return 1;
@@ -426,8 +496,7 @@ static int cmd_put_file(const char *vpath, const char *prefix, int parts, char *
   for (int i = 0; i < parts && ok; i++) {
     char path[400];
     snprintf(path, sizeof path, "/storage/v1/object/authenticated/transfers/%s.p%d", prefix, i);
-    set_status("Guardando %.20s %d/%d", base_name(p), i + 1, parts);
-    ui_redraw(NULL);
+    set_progress(base_name(p), 0, i, parts);
     Resp r;
     Result rc = api(HTTPC_METHOD_GET, path, NULL, NULL, 0, &r);
     if (R_FAILED(rc) || r.status != 200) { snprintf(err, errcap, "Fallo al descargar (HTTP %lu)", R_FAILED(rc) ? 0UL : (unsigned long)r.status); ok = 0; }
@@ -437,6 +506,7 @@ static int cmd_put_file(const char *vpath, const char *prefix, int parts, char *
     }
   }
   fclose(f);
+  set_progress(NULL, 0, 0, 0);
   if (!ok) remove(p);
   return ok;
 }
@@ -481,7 +551,8 @@ static void handle(const char *json, char *last, size_t lastcap) {
   json_get_str(json, "storage", storage, sizeof storage);
   json_get_str(json, "kind", kind, sizeof kind);
   int parts = (int)json_get_num(json, "parts", 0);
-  snprintf(last, lastcap, "%s %s", type, path);
+  (void)last; (void)lastcap;
+  act_begin(type, path);
 
   Buf res = {0};
   char err[160] = "";
@@ -508,7 +579,8 @@ static void handle(const char *json, char *last, size_t lastcap) {
 
   finish(id, ok, res.p, err);
   free(res.p);
-  set_status("Conectado");
+  act_end(ok);
+  set_state(ST_RUN, "Conectada");
 }
 
 /* ------------------------------------------------------------------ */
@@ -551,23 +623,200 @@ static int fetch_site_config(void) {
   snprintf(url, sizeof url, "%s/forja-config.json", g_site);
   Resp r;
   Result rc = http_do(HTTPC_METHOD_GET, url, NULL, NULL, 0, &r);
-  if (R_FAILED(rc)) { set_status("Sin conexion (%08lX)", (unsigned long)rc); return 0; }
+  if (R_FAILED(rc)) { char m[120]; set_error("%s", rc_text(rc, m, sizeof m)); return 0; }
   int ok = r.status == 200 && json_get_str((char *)r.data, "url", g_url, sizeof g_url) &&
            json_get_str((char *)r.data, "anon", g_anon, sizeof g_anon);
-  if (!ok) set_status("No pude leer la config de la web (HTTP %lu)", (unsigned long)r.status);
+  if (!ok) set_error("No pude leer la configuración de la web (HTTP %lu)", (unsigned long)r.status);
   resp_free(&r);
   return ok;
 }
 
 /* ------------------------------------------------------------------ */
-/* Principal                                                           */
+/* Interfaz gráfica (citro2d)                                          */
+/* ------------------------------------------------------------------ */
+#define CLR(r, g, b) C2D_Color32((r), (g), (b), 255)
+#define CLRA(r, g, b, a) C2D_Color32((r), (g), (b), (a))
+#define C_BG1 CLR(0x12, 0x15, 0x1b)
+#define C_BG2 CLR(0x24, 0x19, 0x10)
+#define C_PANEL CLR(0x1b, 0x20, 0x29)
+#define C_PANEL2 CLR(0x25, 0x2c, 0x39)
+#define C_LINE CLR(0x33, 0x3b, 0x4a)
+#define C_TEXT CLR(0xe8, 0xea, 0xf0)
+#define C_MUTED CLR(0x8b, 0x93, 0xa5)
+#define C_ORANGE CLR(0xff, 0x7a, 0x2f)
+#define C_AMBER CLR(0xff, 0xb3, 0x47)
+#define C_OK CLR(0x3e, 0xcf, 0x8e)
+#define C_ERR CLR(0xef, 0x44, 0x44)
+#define C_WARN CLR(0xf5, 0xb8, 0x3d)
+
+static C2D_TextBuf g_tbuf;
+
+static float text_at(const char *s, float x, float y, float sc, u32 col, u32 align) {
+  C2D_Text t;
+  C2D_TextParse(&t, g_tbuf, s);
+  C2D_TextOptimize(&t);
+  float w, h;
+  C2D_TextGetDimensions(&t, sc, sc, &w, &h);
+  C2D_DrawText(&t, C2D_WithColor | align, x, y, 0.0f, sc, sc, col);
+  return w;
+}
+static void text_wrap(const char *s, float x, float y, float sc, u32 col, float width) {
+  C2D_Text t;
+  C2D_TextParse(&t, g_tbuf, s);
+  C2D_TextOptimize(&t);
+  C2D_DrawText(&t, C2D_WithColor | C2D_WordWrap, x, y, 0.0f, sc, sc, col, width);
+}
+static void rrect(float x, float y, float w, float h, float r, u32 c) {
+  C2D_DrawRectSolid(x + r, y, 0, w - 2 * r, h, c);
+  C2D_DrawRectSolid(x, y + r, 0, r, h - 2 * r, c);
+  C2D_DrawRectSolid(x + w - r, y + r, 0, r, h - 2 * r, c);
+  C2D_DrawCircleSolid(x + r, y + r, 0, r, c);
+  C2D_DrawCircleSolid(x + w - r, y + r, 0, r, c);
+  C2D_DrawCircleSolid(x + r, y + h - r, 0, r, c);
+  C2D_DrawCircleSolid(x + w - r, y + h - r, 0, r, c);
+}
+static void card(float x, float y, float w, float h, float r) {
+  rrect(x - 1, y - 1, w + 2, h + 2, r + 1, C_LINE);
+  rrect(x, y, w, h, r, C_PANEL);
+}
+static void bg(float w, float h) { C2D_DrawRectangle(0, 0, 0, w, h, C_BG1, C_BG1, C_BG2, C_BG2); }
+
+/* Llama sobre yunque: logo de Forja */
+static void logo(float cx, float cy, float s) {
+  C2D_DrawTriangle(cx, cy - 15 * s, C_AMBER, cx - 10 * s, cy + 7 * s, C_ORANGE, cx + 10 * s, cy + 7 * s, C_ORANGE, 0);
+  C2D_DrawTriangle(cx, cy - 4 * s, CLR(0xff, 0xe0, 0x9a), cx - 5 * s, cy + 7 * s, C_AMBER, cx + 5 * s, cy + 7 * s, C_AMBER, 0);
+  C2D_DrawRectSolid(cx - 13 * s, cy + 9 * s, 26 * s, 5 * s, C_ORANGE);
+  C2D_DrawRectSolid(cx - 9 * s, cy + 14 * s, 18 * s, 3 * s, CLR(0xc9, 0x58, 0x1c));
+}
+
+static void spinner(float cx, float cy, float r, unsigned tick, u32 base_r, u32 base_g, u32 base_b) {
+  for (int i = 0; i < 8; i++) {
+    float a = (float)i * 3.14159265f / 4.0f;
+    unsigned phase = (tick / 4 + 8 - (unsigned)i) % 8;
+    unsigned alpha = 255 - phase * 28;
+    C2D_DrawCircleSolid(cx + r * cosf(a), cy + r * sinf(a), 0, 3.2f - (float)phase * 0.2f, CLRA(base_r, base_g, base_b, alpha));
+  }
+}
+
+static void wifi_bars(float x, float y) {
+  int s = osGetWifiStrength();   /* 0..3 */
+  for (int i = 0; i < 3; i++)
+    rrect(x + i * 7, y + 12 - i * 5, 5, 6 + i * 5, 1.5f, i < s ? C_OK : C_LINE);
+}
+
+static void short_host(const char *url, char *out, size_t cap) {
+  const char *p = strstr(url, "://");
+  p = p ? p + 3 : url;
+  snprintf(out, cap, "%s", p);
+}
+
+static void draw_top(unsigned tick, State st, const char *status, const char *code, int done, int pl, int pcur, int ptotal, const char *plabel, int pup) {
+  bg(400, 240);
+  logo(32, 30, 1.0f);
+  text_at("Forja", 54, 10, 0.85f, C_TEXT, 0);
+  text_at("para Nintendo 3DS", 55, 34, 0.42f, C_MUTED, 0);
+  text_at("v" VERSION, 386, 16, 0.45f, C_MUTED, C2D_AlignRight);
+
+  card(16, 58, 368, 134, 10);
+  switch (st) {
+    case ST_PAIR: {
+      text_at("Vincula esta consola", 200, 66, 0.62f, C_MUTED, C2D_AlignCenter);
+      const char *c = code[0] ? code : "······";
+      for (int i = 0; i < 6; i++) {
+        float bx = 48 + i * 52;
+        rrect(bx, 94, 44, 58, 8, C_PANEL2);
+        char ch[2] = {c[i] ? c[i] : '.', 0};
+        text_at(ch, bx + 22, 98, 1.45f, code[0] ? C_AMBER : C_LINE, C2D_AlignCenter);
+      }
+      text_at("En la web de Forja:  3DS › Añadir  y escribe el código", 200, 162, 0.46f, C_MUTED, C2D_AlignCenter);
+      break;
+    }
+    case ST_RUN: {
+      float pulse = 11.0f + 3.0f * sinf((float)tick * 0.08f);
+      C2D_DrawCircleSolid(200, 96, 0, pulse + 7, CLRA(0x3e, 0xcf, 0x8e, 50));
+      C2D_DrawCircleSolid(200, 96, 0, 11, C_OK);
+      text_at("Conectada", 200, 114, 0.9f, C_TEXT, C2D_AlignCenter);
+      if (pl) {
+        char lab[96];
+        snprintf(lab, sizeof lab, "%s %s  (%d/%d)", pup ? "Enviando" : "Recibiendo", plabel, pcur + 1, ptotal);
+        text_at(lab, 200, 150, 0.45f, C_AMBER, C2D_AlignCenter);
+        rrect(46, 170, 308, 8, 4, C_PANEL2);
+        float f = ptotal ? (float)(pcur + 1) / (float)ptotal : 0;
+        rrect(46, 170, 308.0f * f > 8 ? 308.0f * f : 8, 8, 4, C_ORANGE);
+      } else {
+        char n[64];
+        if (done) snprintf(n, sizeof n, "%d %s atendidas", done, done == 1 ? "orden" : "órdenes");
+        else snprintf(n, sizeof n, "Esperando órdenes desde la web…");
+        text_at(n, 200, 154, 0.5f, C_MUTED, C2D_AlignCenter);
+      }
+      break;
+    }
+    case ST_ERROR:
+      C2D_DrawCircleSolid(200, 90, 0, 16, C_ERR);
+      text_at("!", 200, 74, 0.8f, CLR(255, 255, 255), C2D_AlignCenter);
+      text_wrap(status, 40, 114, 0.5f, C_TEXT, 320);
+      text_at("Reintentando automáticamente…", 200, 170, 0.42f, C_MUTED, C2D_AlignCenter);
+      break;
+    default:
+      spinner(200, 100, 20, tick, 0xff, 0x7a, 0x2f);
+      text_wrap(status, 40, 140, 0.55f, C_TEXT, 320);
+      break;
+  }
+  rrect(136, 202, 128, 24, 12, C_PANEL2);
+  text_at("START  ·  Salir", 200, 207, 0.45f, C_MUTED, C2D_AlignCenter);
+}
+
+static void draw_bottom(State st, int nacts, const Act *acts, int pl, int pcur, int ptotal, const char *plabel, const u32 *diag) {
+  C2D_DrawRectangle(0, 0, 0, 320, 240, C_PANEL, C_PANEL, C_BG1, C_BG1);
+  text_at("Actividad", 16, 8, 0.7f, C_TEXT, 0);
+  wifi_bars(286, 12);
+
+  card(12, 40, 296, 46, 8);
+  char host[160];
+  short_host(g_url[0] ? g_url : g_site, host, sizeof host);
+  text_at("SERVIDOR", 24, 45, 0.36f, C_MUTED, 0);
+  text_at(host, 24, 57, 0.46f, C_TEXT, 0);
+  char dev[24];
+  snprintf(dev, sizeof dev, "%.8s…", g_device[0] ? g_device : "sin vincular");
+  text_at("DISPOSITIVO", 214, 45, 0.36f, C_MUTED, 0);
+  text_at(dev, 214, 57, 0.46f, g_device[0] ? C_TEXT : C_WARN, 0);
+
+  float y = 96;
+  if (!nacts) {
+    text_at(st == ST_RUN ? "Aún no hay actividad" : "Sin actividad todavía", 160, 130, 0.5f, C_MUTED, C2D_AlignCenter);
+  }
+  for (int i = 0; i < nacts; i++) {
+    u32 c = acts[i].result == 1 ? C_OK : acts[i].result == 2 ? C_ERR : C_AMBER;
+    rrect(12, y, 296, 22, 6, i % 2 ? C_PANEL : C_PANEL2);
+    C2D_DrawCircleSolid(24, y + 11, 0, 4, c);
+    char line[64];
+    snprintf(line, sizeof line, "%.44s", acts[i].text);
+    text_at(line, 36, y + 3, 0.42f, C_TEXT, 0);
+    y += 24;
+  }
+
+  if (pl) {
+    float f = ptotal ? (float)(pcur + 1) / (float)ptotal : 0;
+    text_at(plabel, 16, 214, 0.38f, C_MUTED, 0);
+    rrect(16, 228, 288, 6, 3, C_PANEL2);
+    rrect(16, 228, 288.0f * f > 6 ? 288.0f * f : 6, 6, 3, C_ORANGE);
+  } else if (diag[0] != 0xFFFFFFFFu && (diag[0] || diag[1] != 0xFFFFFFFFu) && st != ST_RUN) {
+    char d[96];
+    snprintf(d, sizeof d, "TLS A:%08lX  B:%s", (unsigned long)diag[0], diag[1] == 0xFFFFFFFFu ? "--" : "");
+    if (diag[1] != 0xFFFFFFFFu) snprintf(d, sizeof d, "TLS  A:%08lX   B:%08lX", (unsigned long)diag[0], (unsigned long)diag[1]);
+    text_at(d, 160, 216, 0.4f, C_MUTED, C2D_AlignCenter);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Hilo de red                                                         */
 /* ------------------------------------------------------------------ */
 static void heartbeat(void) {
   Buf b = {0};
   buf_str(&b, "{\"p_device\":"); buf_json_str(&b, g_device);
   buf_str(&b, ",\"p_info\":{\"proto\":2,\"Agente\":\"Forja3DS " VERSION "\",\"Consola\":\"Nintendo 3DS\"}}");
   Resp r;
-  if (rpc("device_heartbeat", b.p, &r)) { resp_free(&r); set_status("Conectado"); }
+  if (rpc("device_heartbeat", b.p, &r)) resp_free(&r);
   free(b.p);
 }
 
@@ -575,102 +824,139 @@ static void heartbeat(void) {
 static int pair_poll(void) {
   Resp r;
   if (!rpc("device_pair_poll", "{}", &r)) return 0;
-  char dev[64] = "";
+  char dev[64] = "", code[16] = "";
   json_get_str((char *)r.data, "device_id", dev, sizeof dev);
-  if (dev[0]) {
-    snprintf(g_device, sizeof g_device, "%s", dev);
-    g_code[0] = 0;
-    save_session();
-  } else {
-    json_get_str((char *)r.data, "code", g_code, sizeof g_code);
-  }
+  json_get_str((char *)r.data, "code", code, sizeof code);
   resp_free(&r);
+  LightLock_Lock(&g_lock);
+  if (dev[0]) { snprintf(g_device, sizeof g_device, "%s", dev); g_code[0] = 0; }
+  else snprintf(g_code, sizeof g_code, "%s", code);
+  LightLock_Unlock(&g_lock);
+  if (dev[0]) save_session();
   return 1;
 }
 
-int main(void) {
-  gfxInitDefault();
-  consoleInit(GFX_TOP, &g_top);
-  consoleInit(GFX_BOTTOM, &g_bottom);
-  consoleSelect(&g_bottom);
-  printf("\n Forja3DS " VERSION "\n Conecta tu 3DS con Forja.\n\n Deja la app abierta y con WiFi.\n Si cierras la tapa, la consola\n se suspende.\n");
-  osSetSpeedupEnable(true);
-  aptSetSleepAllowed(false);
-
+static void worker(void *arg) {
+  (void)arg;
   snprintf(g_site, sizeof g_site, "%s", DEFAULT_SITE);
   load_session();
   load_config();
-  Result hrc = httpcInit(0);
-  if (R_FAILED(hrc)) set_status("httpc no disponible (%08lX)", (unsigned long)hrc);
+  Result hrc = httpcInit(0x100000);
+  if (R_FAILED(hrc)) set_error("httpc no disponible (%08lX)", (unsigned long)hrc);
 
-  char last[160] = "";
-  int cfg_ok = g_url[0] && g_anon[0], authed = 0, need_redraw = 1;
+  char dummy[8] = "";
+  int cfg_ok = g_url[0] && g_anon[0], authed = 0;
   time_t last_beat = 0, last_try = 0, last_poll = 0;
-  if (R_SUCCEEDED(hrc)) set_status("Iniciando…");
 
-  while (aptMainLoop()) {
-    hidScanInput();
-    if (hidKeysDown() & KEY_START) break;
+  while (!g_quit) {
     time_t now = time(NULL);
 
     if (R_FAILED(hrc)) {
       /* sin servicio HTTP no hay nada que hacer */
     } else if (!cfg_ok) {
-      if (now - last_try >= 15) {
+      if (now - last_try >= 12) {
         last_try = now;
-        set_status("Leyendo configuracion…"); ui_redraw(last);
+        set_state(ST_CONFIG, "Leyendo la configuración de la web…");
         cfg_ok = fetch_site_config();
-        need_redraw = 1;
+        if (!cfg_ok && g_state != ST_ERROR) set_error("No se pudo conectar con %s", g_site);
       }
     } else if (!authed) {
-      if (now - last_try >= 15) {
+      if (now - last_try >= 12) {
         last_try = now;
-        set_status("Iniciando sesion…"); ui_redraw(last);
+        set_state(ST_AUTH, "Iniciando sesión…");
         authed = login();
-        if (authed && g_device[0]) { set_status("Conectado"); heartbeat(); last_beat = now; }
-        else if (authed) set_status("Pidiendo codigo…");
-        need_redraw = 1;
+        if (authed && g_device[0]) { set_state(ST_RUN, "Conectada"); heartbeat(); last_beat = now; }
+        else if (authed) { set_state(ST_PAIR, "Pidiendo código…"); last_poll = 0; }
+        else if (g_state != ST_ERROR) set_error("No se pudo iniciar sesión");
       }
     } else if (!g_device[0]) {
-      /* Emparejado: muestra el código y espera a que lo apruebes en la web */
       if (now - last_poll >= 3) {
         last_poll = now;
         if (pair_poll()) {
-          if (g_device[0]) { set_status("Vinculada. Conectando…"); heartbeat(); last_beat = now; }
-          else set_status("Esperando el codigo en la web");
+          if (g_device[0]) { set_state(ST_RUN, "Conectada"); heartbeat(); last_beat = now; }
+          else set_state(ST_PAIR, "Esperando el código en la web");
         } else if (g_last_status == 401) { authed = 0; last_try = 0; }
-        else set_status("Sin respuesta, reintentando…");
-        need_redraw = 1;
+        else set_error("Sin respuesta del servidor");
       }
     } else {
-      if (now - last_beat >= 15) { last_beat = now; heartbeat(); need_redraw = 1; }
+      if (now - last_beat >= 15) { last_beat = now; heartbeat(); }
       if (now - last_poll >= 2) {
         last_poll = now;
         char body[160];
         snprintf(body, sizeof body, "{\"p_device\":\"%s\"}", g_device);
         Resp r;
         if (rpc("device_command_claim", body, &r)) {
+          if (g_state != ST_RUN) set_state(ST_RUN, "Conectada");
           const char *j = (const char *)r.data;
           while (*j == ' ' || *j == '\n') j++;
-          if (*j == '{') { ui_redraw(last); handle(j, last, sizeof last); need_redraw = 1; last_poll = 0; }
+          if (*j == '{') { handle(j, dummy, sizeof dummy); last_poll = 0; }
           resp_free(&r);
         } else if (strstr(g_last_err, "sin permiso")) {
           /* Desvinculada desde la web: vuelve a pedir un código */
           g_device[0] = 0; save_session();
-          set_status("Desvinculada. Pidiendo codigo…");
-          need_redraw = 1;
+          set_state(ST_PAIR, "Desvinculada. Pidiendo código…");
         } else {
-          set_status("Sin respuesta, reintentando…");
+          set_error("Sin respuesta del servidor");
           last_poll = time(NULL) + 8;   /* espera ~10 s antes de volver a intentarlo */
-          need_redraw = 1;
         }
       }
     }
-    if (need_redraw) { ui_redraw(last); need_redraw = 0; }
-    gspWaitForVBlank();
+    svcSleepThread(100 * 1000 * 1000LL);   /* 100 ms */
+  }
+  httpcExit();
+}
+
+int main(void) {
+  gfxInitDefault();
+  C3D_Init(C3D_DEFAULT_CMDBUF_SIZE);
+  C2D_Init(C2D_DEFAULT_MAX_OBJECTS);
+  C2D_Prepare();
+  C3D_RenderTarget *top = C2D_CreateScreenTarget(GFX_TOP, GFX_LEFT);
+  C3D_RenderTarget *bot = C2D_CreateScreenTarget(GFX_BOTTOM, GFX_LEFT);
+  g_tbuf = C2D_TextBufNew(8192);
+  LightLock_Init(&g_lock);
+  osSetSpeedupEnable(true);
+  aptSetSleepAllowed(false);
+
+  s32 prio = 0;
+  svcGetThreadPriority(&prio, CUR_THREAD_HANDLE);
+  Thread th = threadCreate(worker, NULL, 256 * 1024, prio - 1, -2, false);
+
+  unsigned tick = 0;
+  while (aptMainLoop()) {
+    hidScanInput();
+    if (hidKeysDown() & KEY_START) break;
+
+    /* Copia del estado para dibujar sin retener el bloqueo */
+    LightLock_Lock(&g_lock);
+    State st = g_state;
+    char status[200], code[16], plabel[48];
+    Act acts[5];
+    snprintf(status, sizeof status, "%s", g_status);
+    snprintf(code, sizeof code, "%s", g_code);
+    snprintf(plabel, sizeof plabel, "%s", g_prog_label);
+    memcpy(acts, g_acts, sizeof acts);
+    int nacts = g_nacts, done = g_done, pl = g_prog_total > 0, pcur = g_prog_cur, ptotal = g_prog_total, pup = g_prog_up;
+    u32 diag[2] = {g_diag[0], g_diag[1]};
+    LightLock_Unlock(&g_lock);
+
+    C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
+    C2D_TextBufClear(g_tbuf);
+    C2D_TargetClear(top, C_BG1);
+    C2D_SceneBegin(top);
+    draw_top(tick, st, status, code, done, pl, pcur, ptotal, plabel, pup);
+    C2D_TargetClear(bot, C_BG1);
+    C2D_SceneBegin(bot);
+    draw_bottom(st, nacts, acts, pl, pcur, ptotal, plabel, diag);
+    C3D_FrameEnd(0);
+    tick++;
   }
 
-  httpcExit();
+  g_quit = 1;
+  threadJoin(th, 4ULL * 1000 * 1000 * 1000);   /* hasta 4 s; si hay una petición en curso, salimos igualmente */
+  C2D_TextBufDelete(g_tbuf);
+  C2D_Fini();
+  C3D_Fini();
   gfxExit();
   return 0;
 }
