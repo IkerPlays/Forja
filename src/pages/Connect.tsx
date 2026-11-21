@@ -77,8 +77,8 @@ export default function Connect() {
 
       <section className="panel">
         <h2>¿No conecta?</h2>
-        <Faq q="La 3DS dice «Sin conexión» o un código D8A0A03C">
-          Es un fallo de seguridad HTTPS de la consola (certificados antiguos). Abre la <strong>app de escritorio</strong> en un PC de la <em>misma WiFi</em> con «Puente local para la 3DS» activado (viene activado): la 3DS lo encuentra sola y se conecta a través del PC.
+        <Faq q="La 3DS dice «Sin conexión» / «No se pudo conectar»">
+          Hasta la v0.3 la causa era que el SSL del sistema de la 3DS solo llega a TLS 1.1 y los servidores actuales exigen TLS 1.2. Desde la <strong>v0.5</strong> la app lleva su propio TLS, así que debería conectar por sí sola. Si aun así falla verás el código del error en pantalla. Plan B: abre la <strong>app de escritorio</strong> en un PC de la <em>misma WiFi</em> (puente local activado, viene así) y la 3DS lo encuentra sola; si no, toca «Escribir la IP del PC» y teclea la que ves en «Este equipo». En Windows, usa el botón «Abrir puertos en el cortafuegos».
         </Faq>
         <Faq q="La 3DS dice «Activa Allow anonymous sign-ins»">En Supabase → Authentication → Sign In / Providers, activa <em>Allow anonymous sign-ins</em> y reinicia la app de la 3DS.</Faq>
         <Faq q="El código de la 3DS no es válido">Caduca a los 30 minutos y solo vale una vez. Reabre Forja3DS para obtener uno nuevo y escríbelo sin espacios.</Faq>

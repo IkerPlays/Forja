@@ -5,10 +5,10 @@ const os = require('node:os')
 const path = require('node:path')
 const http = require('node:http')
 const dgram = require('node:dgram')
-const R = require('../src/fsroots')
-const { buildPacket } = require('../src/pad')
-const { keyName } = require('../src/input')
-const relay = require('../src/relay')
+const R = require('../src/core/fsroots')
+const { buildPacket } = require('../src/core/pad')
+const { keyName } = require('../src/core/input')
+const relay = require('../src/core/relay')
 
 ;(async () => {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), 'forja-d-'))
@@ -41,6 +41,23 @@ const relay = require('../src/relay')
   const reply = await new Promise(res => { const s = dgram.createSocket('udp4'); s.on('message', m => { s.close(); res(String(m)) }); s.send('FORJA?', 18766, '127.0.0.1') })
   assert.match(reply, /^FORJA http:\/\/.+:18765$/)
   h.stop()
+  // Autoactualización del núcleo: se empaqueta, se verifica el sha256 y se ejecuta con un electron simulado
+  const crypto = require('node:crypto'), fssync = require('node:fs'), Module = require('node:module')
+  const { semverGt, loadDownloadedCore } = require('../src/loader')
+  assert.ok(semverGt('0.5.0', '0.4.9') && semverGt('1.0.0', '0.9.9') && !semverGt('0.4.0', '0.4.0') && !semverGt('0.3.9', '0.4.0'))
+  require('esbuild').buildSync({ entryPoints: [path.join(__dirname, '..', 'src', 'core', 'index.js')], bundle: true, platform: 'node', format: 'cjs', target: 'node20', external: ['electron', '@nut-tree-fork/nut-js'], outfile: path.join(base, 'core.js'), logLevel: 'error' })
+  const sha = crypto.createHash('sha256').update(fssync.readFileSync(path.join(base, 'core.js'))).digest('hex')
+  const calls = []
+  const stubElectron = { app: { requestSingleInstanceLock: () => true, on: (n) => calls.push('on:' + n), whenReady: () => new Promise(() => {}), getPath: () => base, isPackaged: false, getVersion: () => '0.0.0', quit() {}, setLoginItemSettings() {} },
+    BrowserWindow: class {}, Tray: class {}, Menu: {}, ipcMain: { handle: (n) => calls.push('handle:' + n), on: () => {} }, dialog: {}, session: {}, desktopCapturer: {}, shell: {}, screen: {}, nativeImage: {}, Notification: class {} }
+  const req = Module.createRequire(path.join(__dirname, '..', 'package.json'))
+  const fakeReq = id => (id === 'electron' ? stubElectron : req(id))
+  const start = loadDownloadedCore(path.join(base, 'core.js'), sha, { require: fakeReq, dirname: path.join(__dirname, '..', 'src'), crypto, fs: fssync })
+  assert.equal(typeof start, 'function')
+  start({ electron: stubElectron, shellDir: path.join(__dirname, '..', 'src'), version: '9.9.9' })
+  assert.ok(calls.includes('handle:forja:update:check') && calls.includes('handle:forja:fs:list'))
+  assert.equal(loadDownloadedCore(path.join(base, 'core.js'), 'f'.repeat(64), { require: fakeReq, dirname: '', crypto, fs: fssync }), null)   // sha256 incorrecto → se rechaza
+
   await fs.rm(base, { recursive: true, force: true })
   console.log('✔ escritorio: todas las pruebas pasan')
 })().catch(e => { console.error(e); process.exit(1) })

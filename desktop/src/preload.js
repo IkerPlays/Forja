@@ -20,6 +20,8 @@ contextBridge.exposeInMainWorld('forjaDesktop', {
   },
   relayStatus: () => inv('relay:status'),
   openFirewall: () => inv('fw:allow'),
+  checkUpdate: () => inv('update:check'),
+  applyUpdate: () => inv('update:apply'),
   inputMouse: m => ipcRenderer.send('forja:input:mouse', m),
   inputKey: m => ipcRenderer.send('forja:input:key', m),
   padSend: (ip, port, state) => ipcRenderer.send('forja:pad', ip, port, state),

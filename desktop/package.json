@@ -10,23 +10,49 @@
   "scripts": {
     "start": "electron .",
     "selftest": "node test/selftest.js",
-    "dist": "electron-builder --publish never"
+    "dist": "electron-builder --publish never",
+    "bundle": "node scripts/bundle-core.js"
   },
   "dependencies": {
     "@nut-tree-fork/nut-js": "^4.2.6"
   },
   "devDependencies": {
     "electron": "^45.4.1",
-    "electron-builder": "^26.18.0"
+    "electron-builder": "^26.18.0",
+    "esbuild": "^0.25.0"
   },
   "build": {
     "appId": "app.forja.desktop",
     "productName": "Forja",
-    "directories": { "output": "dist", "buildResources": "build" },
-    "files": ["src/**/*", "package.json"],
-    "asarUnpack": ["**/node_modules/@nut-tree-fork/**", "**/node_modules/@nut-tree/**"],
-    "win": { "target": ["nsis"], "artifactName": "Forja-Setup-${version}.${ext}" },
-    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true, "perMachine": false },
-    "linux": { "target": ["AppImage"], "category": "Utility", "artifactName": "Forja-${version}.${ext}" }
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "**/node_modules/@nut-tree-fork/**",
+      "**/node_modules/@nut-tree/**"
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "artifactName": "Forja-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Utility",
+      "artifactName": "Forja-${version}.${ext}"
+    }
   }
 }

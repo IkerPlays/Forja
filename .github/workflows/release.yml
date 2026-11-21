@@ -94,20 +94,6 @@ jobs:
           files: |
             agent3ds/Forja3DS.cia
             agent3ds/Forja3DS.3dsx
-      - uses: actions/checkout@v4
-        with:
-          ref: main
-          path: web
-      - name: Actualizar las descargas de la web
-        run: |
-          mkdir -p web/public/downloads
-          cp agent3ds/Forja3DS.cia agent3ds/Forja3DS.3dsx web/public/downloads/
-          cd web
-          git config --global --add safe.directory "$GITHUB_WORKSPACE/web"
-          git config user.name "github-actions"
-          git config user.email "actions@users.noreply.github.com"
-          git add public/downloads
-          git diff --cached --quiet || { git commit -m "Forja3DS ${{ needs.release.outputs.tag }}: actualizar descargas de la web" && git push origin HEAD:main; }
 
   desktop:
     needs: release
@@ -130,9 +116,36 @@ jobs:
       - run: npm ci
       - run: npm run selftest
       - run: npm run dist
+      - name: Núcleo actualizable (solo una vez)
+        if: matrix.os == 'ubuntu-latest'
+        run: npm run bundle
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.release.outputs.tag }}
           files: |
             desktop/dist/Forja-Setup-*.exe
             desktop/dist/Forja-*.AppImage
+            desktop/dist-core/desktop-core.js
+
+  publish-web:
+    needs: [release, threeds, desktop]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Publicar descargas y latest.json en la web (autoactualización)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ needs.release.outputs.tag }}"; V="${{ needs.release.outputs.version }}"
+          mkdir -p dl public/downloads
+          gh release download "$TAG" --repo "${{ github.repository }}" -p 'Forja3DS.cia' -p 'Forja3DS.3dsx' -p 'desktop-core.js' -D dl
+          cp dl/Forja3DS.cia dl/Forja3DS.3dsx dl/desktop-core.js public/downloads/
+          SHA="$(sha256sum dl/desktop-core.js | cut -d' ' -f1)"
+          printf '{"version":"%s","desktop":{"version":"%s","sha256":"%s"},"threeds":{"version":"%s"}}\n' "$V" "$V" "$SHA" "$V" > public/downloads/latest.json
+          cat public/downloads/latest.json
+          git config user.name "github-actions"
+          git config user.email "actions@users.noreply.github.com"
+          git add public/downloads
+          git diff --cached --quiet || { git commit -m "Forja $TAG: descargas y latest.json para la autoactualización" && git push origin HEAD:main; }

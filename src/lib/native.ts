@@ -1,13 +1,14 @@
 /** API que la app de escritorio (Electron) inyecta como window.forjaDesktop. En el navegador no existe. */
 export interface DesktopSettings {
   webUrl: string; roots: string[]; fullAccess: boolean; allowInput: boolean; allowScreen: boolean
-  relay: boolean; autostart: boolean; hostId: string
+  relay: boolean; autostart: boolean; hostId: string; deviceId?: string
+  shareCamera: boolean; shareMic: boolean; screenQuality: 'fluid' | 'native'
 }
 export interface ForjaDesktop {
   isDesktop: true
-  info(): Promise<{ hostname: string; platform: string; version: string; hostId: string; input: boolean; lan: string[] }>
+  info(): Promise<{ hostname: string; platform: string; version: string; shellVersion?: string; hostId: string; input: boolean; lan: string[] }>
   getSettings(): Promise<DesktopSettings>
-  setSettings(patch: Partial<Pick<DesktopSettings, 'fullAccess' | 'allowInput' | 'allowScreen' | 'relay' | 'autostart'>>): Promise<DesktopSettings>
+  setSettings(patch: Partial<Pick<DesktopSettings, 'fullAccess' | 'allowInput' | 'allowScreen' | 'relay' | 'autostart' | 'deviceId' | 'shareCamera' | 'shareMic' | 'screenQuality'>>): Promise<DesktopSettings>
   pickRoot(): Promise<DesktopSettings>
   removeRoot(p: string): Promise<DesktopSettings>
   fs: {
@@ -21,6 +22,8 @@ export interface ForjaDesktop {
   }
   relayStatus(): Promise<{ on: boolean; addresses: string[]; requests: number; error?: string }>
   openFirewall(): Promise<boolean>
+  checkUpdate(): Promise<{ ok: boolean; current?: string; latest?: string; downloaded?: boolean; error?: string }>
+  applyUpdate(): Promise<void>
   inputMouse(m: Record<string, unknown>): void
   inputKey(m: Record<string, unknown>): void
   padSend(ip: string, port: number, state: unknown): void

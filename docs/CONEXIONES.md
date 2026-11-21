@@ -28,8 +28,10 @@ Sin instalar nada puedes compartir una carpeta desde Chrome/Edge (*Mi PC → Arc
 
 La consola entra con una cuenta anónima **limitada a su propio dispositivo** (no ve proyectos ni el resto del estudio). El código caduca a los 30 min y vale una sola vez.
 
-### Si la 3DS no conecta (código `D8A0A03C`, «Sin conexión»)
-Es un problema de certificados HTTPS de la consola. Abre la **app de escritorio** en un PC de la **misma WiFi** (con *Puente local para la 3DS* activado, que viene activado): la 3DS la encuentra sola (UDP 8766) y se conecta a través del PC por HTTP plano en tu red local. En la pantalla de la 3DS verás el servidor como `http://192.168.x.x:8765`.
+### Si la 3DS no conecta
+**Causa encontrada:** el módulo SSL del sistema de la 3DS solo soporta hasta **TLS 1.1** ([3dbrew](https://www.3dbrew.org/wiki/SSL_Services)); Netlify y Supabase exigen TLS 1.2+, así que ninguna versión que usara el SSL del sistema (hasta la v0.3) podía conectar, por mucho que se desactivara la verificación del certificado. Desde la **v0.5** Forja3DS lleva su propio TLS (libcurl + mbedTLS) y valida los certificados con las CA incluidas (si el reloj de la consola está mal, reintenta sin validar).
+
+Si aun así falla, la pantalla inferior muestra el resultado de las dos pruebas (`TLS verificado / sin verificar`) y el código de error. **Plan B:** abre la **app de escritorio** en un PC de la **misma WiFi** (puente local, activado por defecto): la 3DS lo busca sola (UDP 8766) y habla con él por HTTP en tu red. También puedes tocar **«Escribir la IP del PC»** y teclearla con el teclado numérico en pantalla (la consola ya rellena el principio de la IP). En Windows, si no te encuentra, usa en *Este equipo* el botón **Abrir puertos en el cortafuegos**.
 
 ### Mando y pantalla táctil de la 3DS
 Los navegadores no pueden enviar UDP. Con la **app de escritorio abierta en un PC de tu red**: pon la **IP de la 3DS** en su ficha (Ajustes → Internet → Ajustes de conexión) y activa **Input Redirection** en Luma3DS (L+↓+Select → Rosalina → Input Redirection → Start). Desde la tablet (*3DS → Jugar*) tienes botones, Circle Pad, C-Stick y pantalla táctil.
@@ -38,6 +40,14 @@ Los navegadores no pueden enviar UDP. Con la **app de escritorio abierta en un P
 La consola no emite vídeo. Abre un visor de pantalla de 3DS (NTR/Snickerstream) o una capturadora en un PC y compártelo (*Jugar → Compartir desde aquí*).
 
 > **Honestidad sobre las pruebas:** todo se compila y pasa pruebas automáticas (rutas seguras, protocolo del mando, puente local), pero no se ha podido probar con una 3DS ni con un PC real. Si algo falla, el estado y los errores salen en la pantalla superior de la 3DS y en *Este equipo*.
+
+## Actualizaciones automáticas
+* **3DS**: al conectarse comprueba `/downloads/latest.json` de la web; si hay versión nueva descarga el `.3dsx` (si la abriste desde el Homebrew Launcher) o instala el `.cia` (si la tienes instalada) y avisa: «Reinicia la app para usarla».
+* **PC**: la app de escritorio busca al abrirse y cada 6 horas. Descarga el nuevo «núcleo» (verifica su sha256), y se aplica al reiniciar (sola, en segundo plano, si la ventana está oculta). Se puede forzar en *Este equipo → Actualizaciones*. Solo si cambia el propio motor (Electron) hay que instalar el nuevo instalador.
+* La web se actualiza siempre sola con cada despliegue.
+
+## Pantalla y videollamada
+Quien comparte (desde el navegador o la app de escritorio) puede incluir **pantalla + cámara + micrófono**: la cámara aparece en un recuadro y el micrófono suena. La pantalla va a hasta 1080p y 60 fps (opción «Nativa» en *Este equipo*), con bitrate alto en red local.
 
 ## Seguridad
 * Cada agente se autentica con Supabase y las reglas RLS limitan qué ve: miembros del estudio → todo el estudio; consola emparejada → solo su dispositivo.

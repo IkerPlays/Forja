@@ -32,3 +32,7 @@ Para apuntar a otra web: `make CFLAGS_EXTRA=...` o edita `DEFAULT_SITE` en `sour
 ## Notas
 
 - No controla botones ni pantalla de otros juegos: el mando y la pantalla táctil los envía la app de escritorio de Forja desde tu PC.
+
+## TLS y conexión (v0.5+)
+El SSL del sistema de la 3DS solo llega a TLS 1.1 (3dbrew), por eso las versiones con `httpc` no podían conectar con servidores modernos. Ahora el TLS 1.2 va dentro de la app (libcurl + mbedTLS, CA de Mozilla incluidas; si falla la validación reintenta sin validar). Si no hay HTTPS, busca la app de escritorio por la WiFi o deja escribir su IP con un teclado numérico propio.
+La URL de Supabase se integra al compilar (es pública), así que no depende de la web. Se autoactualiza desde `/downloads/latest.json`.

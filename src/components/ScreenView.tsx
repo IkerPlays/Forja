@@ -1,27 +1,32 @@
 import { useEffect, useRef, useState } from 'react'
-import { Cast, Maximize, MonitorUp, Video, VideoOff, MousePointer2, Keyboard, KeyboardIcon } from 'lucide-react'
-import { Link, ScreenSharer, ScreenViewer } from '../lib/devices'
+import { Cast, Maximize, MonitorUp, Video, VideoOff, MousePointer2, Keyboard, KeyboardIcon, Camera, Mic } from 'lucide-react'
+import { Link, ScreenSharer, ScreenViewer, SCREEN_CONSTRAINTS, tuneForMotion, type Sources, type ViewerStreams } from '../lib/devices'
 import { errMsg } from '../lib/util'
 import { useToast } from './ui'
 
+const clamp = (v: number) => Math.min(1, Math.max(0, v))
+
 /**
  * Pantalla en tiempo real por WebRTC (la señalización va por Supabase Realtime).
- *  · Ver: cualquier navegador del estudio.
+ *  · Ver: cualquier navegador del estudio. Pantalla + cámara a la vez (como una videollamada).
  *  · Compartir: el equipo que tiene la pantalla (PC) o que muestra el visor/capturadora de la 3DS.
  */
 export default function ScreenView({ link, kind, remoteControl }: { link: Link; kind: 'pc' | '3ds'; remoteControl?: boolean }) {
   const toast = useToast()
   const [mode, setMode] = useState<'view' | 'share'>('view')
   const [status, setStatus] = useState('Buscando emisor…')
-  const [stream, setStream] = useState<MediaStream | null>(null)
+  const [media, setMedia] = useState<ViewerStreams | null>(null)
   const [viewers, setViewers] = useState(0)
   const [control, setControl] = useState(false)
   const video = useRef<HTMLVideoElement>(null)
+  const pip = useRef<HTMLVideoElement>(null)
   const wrap = useRef<HTMLDivElement>(null)
   const sharer = useRef<ScreenSharer | null>(null)
   const [sharing, setSharing] = useState(false)
+  const [localPreview, setLocalPreview] = useState<Sources | null>(null)
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([])
   const [cam, setCam] = useState('')
+  const [want, setWant] = useState({ screen: true, camera: false, mic: false })
   const touches = useRef(new Map<number, { x: number; y: number }>())
   const press = useRef<{ timer: ReturnType<typeof setTimeout>; moved: boolean; fired: boolean } | null>(null)
   const lastScrollY = useRef(0)
@@ -31,39 +36,16 @@ export default function ScreenView({ link, kind, remoteControl }: { link: Link; 
   // Espectador
   useEffect(() => {
     if (mode !== 'view') return
-    const v = new ScreenViewer(link, setStream, setStatus)
-    return () => { v.leave(); setStream(null) }
+    const v = new ScreenViewer(link, setMedia, setStatus)
+    return () => { v.leave(); setMedia(null) }
   }, [link, mode])
 
-  useEffect(() => { if (video.current) video.current.srcObject = stream }, [stream])
+  const shown: ViewerStreams | null = sharing ? localPreview : media
+  const mainStream = shown?.screen ?? shown?.camera ?? null
+  const pipStream = shown?.screen && shown.camera ? shown.camera : null
+  useEffect(() => { if (video.current) video.current.srcObject = mainStream }, [mainStream])
+  useEffect(() => { if (pip.current) pip.current.srcObject = pipStream }, [pipStream])
   useEffect(() => () => sharer.current?.stop(), [])
-
-  async function shareScreen() {
-    try {
-      const s = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 60 }, audio: true })
-      begin(s)
-    } catch (e) { toast(errMsg(e), 'err') }
-  }
-  async function shareCamera() {
-    try {
-      const s = await navigator.mediaDevices.getUserMedia({
-        video: cam ? { deviceId: { exact: cam }, frameRate: 60, width: { ideal: 1920 } } : { frameRate: 60 }, audio: false,
-      })
-      setDevices((await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput'))
-      begin(s)
-    } catch (e) { toast(errMsg(e), 'err') }
-  }
-  function begin(s: MediaStream) {
-    sharer.current?.stop()
-    sharer.current = new ScreenSharer(link, s, setViewers)
-    s.getVideoTracks()[0]?.addEventListener('ended', stopShare)
-    setStream(s); setSharing(true)
-    if (video.current) video.current.srcObject = s
-  }
-  function stopShare() {
-    sharer.current?.stop(); sharer.current = null
-    setSharing(false); setStream(null); setViewers(0)
-  }
 
   async function listCams() {
     try {
@@ -73,10 +55,42 @@ export default function ScreenView({ link, kind, remoteControl }: { link: Link; 
     } catch (e) { toast(errMsg(e), 'err') }
   }
 
-  /* Control remoto del PC: ratón y teclado normalizados */
+  async function startShare() {
+    if (!want.screen && !want.camera && !want.mic) return toast('Elige qué compartir', 'err')
+    try {
+      const src: Sources = {}
+      if (want.screen) src.screen = await navigator.mediaDevices.getDisplayMedia(SCREEN_CONSTRAINTS(false))
+      if (want.camera || want.mic) {
+        src.camera = await navigator.mediaDevices.getUserMedia({
+          video: want.camera ? (cam ? { deviceId: { exact: cam } } : true) : false, audio: want.mic,
+        })
+        if (want.camera) { try { await src.camera.getVideoTracks()[0]?.applyConstraints({ frameRate: { ideal: 60 }, width: { ideal: 1920 } }) } catch { /* noop */ } }
+      }
+      if (src.screen) tuneForMotion(src.screen)
+      sharer.current?.stop()
+      sharer.current = new ScreenSharer(link, src, setViewers)
+      const end = () => stopShare()
+      src.screen?.getVideoTracks()[0]?.addEventListener('ended', end)
+      src.camera?.getVideoTracks()[0]?.addEventListener('ended', end)
+      // Vista previa propia: sin sonido para no hacer eco
+      setLocalPreview({ screen: src.screen, camera: src.camera }); setSharing(true)
+    } catch (e) { toast(errMsg(e), 'err') }
+  }
+  function stopShare() {
+    sharer.current?.stop(); sharer.current = null
+    setSharing(false); setLocalPreview(null); setViewers(0)
+  }
+
+  /* Control remoto: ratón, teclado y táctil. Las coordenadas se miden sobre el VÍDEO real
+     (el elemento tiene franjas negras si la proporción no coincide, y contarlas desplazaba el clic). */
   function norm(e: React.PointerEvent | React.WheelEvent) {
-    const r = video.current!.getBoundingClientRect()
-    return { x: Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)), y: Math.min(1, Math.max(0, (e.clientY - r.top) / r.height)) }
+    const v = video.current!
+    const r = v.getBoundingClientRect()
+    const vw = v.videoWidth || r.width, vh = v.videoHeight || r.height
+    const scale = Math.min(r.width / vw, r.height / vh)
+    const cw = vw * scale, ch = vh * scale
+    const ox = r.left + (r.width - cw) / 2, oy = r.top + (r.height - ch) / 2
+    return { x: clamp((e.clientX - ox) / cw), y: clamp((e.clientY - oy) / ch) }
   }
   const send = (p: Record<string, unknown>) => { if (control && remoteControl) void link.input(p) }
   const CODES: Record<string, string> = { ' ': 'Space', '.': 'Period', ',': 'Comma', '-': 'Minus', '=': 'Equal', '/': 'Slash', ';': 'Semicolon', "'": 'Quote' }
@@ -89,6 +103,18 @@ export default function ScreenView({ link, kind, remoteControl }: { link: Link; 
     if (up) send({ k: 'key', a: 'up', key: 'Shift', code: 'ShiftLeft' })
   }
   const tap = (code: string) => { send({ k: 'key', a: 'down', key: code, code }); send({ k: 'key', a: 'up', key: code, code }) }
+
+  useEffect(() => {
+    if (!control || !remoteControl) return
+    const kd = (e: KeyboardEvent) => {
+      if (e.key === 'Unidentified' || e.keyCode === 229) { ime.current = true; return }   // teclado táctil: lo gestiona beforeinput
+      ime.current = false
+      e.preventDefault(); void link.input({ k: 'key', a: 'down', key: e.key, code: e.code })
+    }
+    const ku = (e: KeyboardEvent) => { if (e.key === 'Unidentified' || e.keyCode === 229) return; e.preventDefault(); void link.input({ k: 'key', a: 'up', key: e.key, code: e.code }) }
+    window.addEventListener('keydown', kd); window.addEventListener('keyup', ku)
+    return () => { window.removeEventListener('keydown', kd); window.removeEventListener('keyup', ku) }
+  }, [control, remoteControl, link])
 
   // Táctil: toque = clic · arrastrar = arrastrar · mantener = clic derecho · dos dedos = desplazar
   function onDown(e: React.PointerEvent<HTMLVideoElement>) {
@@ -133,18 +159,8 @@ export default function ScreenView({ link, kind, remoteControl }: { link: Link; 
     }
     send({ k: 'mouse', a: 'up', b: e.button, ...norm(e) })
   }
-  useEffect(() => {
-    if (!control || !remoteControl) return
-    const kd = (e: KeyboardEvent) => {
-      if (e.key === 'Unidentified' || e.keyCode === 229) { ime.current = true; return }   // teclado táctil: lo gestiona beforeinput
-      ime.current = false
-      e.preventDefault(); void link.input({ k: 'key', a: 'down', key: e.key, code: e.code })
-    }
-    const ku = (e: KeyboardEvent) => { if (e.key === 'Unidentified' || e.keyCode === 229) return; e.preventDefault(); void link.input({ k: 'key', a: 'up', key: e.key, code: e.code }) }
-    window.addEventListener('keydown', kd); window.addEventListener('keyup', ku)
-    return () => { window.removeEventListener('keydown', kd); window.removeEventListener('keyup', ku) }
-  }, [control, remoteControl, link])
 
+  const hasMedia = !!mainStream
   return (
     <div className="screen">
       <div className="screen-bar">
@@ -153,7 +169,7 @@ export default function ScreenView({ link, kind, remoteControl }: { link: Link; 
           <button className={mode === 'share' ? 'on' : ''} onClick={() => setMode('share')}><Cast size={14} /> Compartir desde aquí</button>
         </div>
         <div className="spacer" />
-        {mode === 'view' && stream && (
+        {mode === 'view' && hasMedia && (
           <>
             {remoteControl && <button className={`btn sm ${control ? 'primary' : ''}`} onClick={() => setControl(c => !c)}>
               <MousePointer2 size={14} /> Control {control ? 'activado' : 'desactivado'}</button>}
@@ -169,17 +185,21 @@ export default function ScreenView({ link, kind, remoteControl }: { link: Link; 
             <>
               <p>
                 {kind === 'pc'
-                  ? 'Comparte la pantalla de este PC. Todos los del estudio la verán en directo desde la tablet o cualquier navegador.'
-                  : 'La 3DS no emite vídeo por sí sola: abre en este equipo un visor de pantalla de 3DS (por ejemplo el de NTR/Snickerstream) o conecta una capturadora, y comparte esa ventana o ese dispositivo.'}
+                  ? 'Comparte este equipo con tu estudio: la pantalla, la cámara y el micrófono a la vez, como una videollamada.'
+                  : 'La 3DS no emite vídeo por sí sola: abre en este equipo un visor de pantalla de 3DS (por ejemplo el de NTR/Snickerstream) o conecta una capturadora (como cámara) y compártelo.'}
               </p>
-              <div className="row wrap">
-                <button className="btn primary" onClick={shareScreen}><MonitorUp size={16} /> Compartir pantalla o ventana</button>
-                <button className="btn" onClick={shareCamera}><Video size={16} /> Usar cámara / capturadora</button>
-                <select value={cam} onFocus={listCams} onChange={e => setCam(e.target.value)} aria-label="Dispositivo de vídeo">
-                  <option value="">Dispositivo predeterminado</option>
-                  {devices.map(d => <option key={d.deviceId} value={d.deviceId}>{d.label || d.deviceId.slice(0, 8)}</option>)}
-                </select>
+              <div className="share-opts">
+                <label><input type="checkbox" checked={want.screen} onChange={e => setWant(w => ({ ...w, screen: e.target.checked }))} /> <MonitorUp size={15} /> Pantalla o ventana</label>
+                <label><input type="checkbox" checked={want.camera} onChange={e => setWant(w => ({ ...w, camera: e.target.checked }))} /> <Camera size={15} /> Cámara / capturadora</label>
+                <label><input type="checkbox" checked={want.mic} onChange={e => setWant(w => ({ ...w, mic: e.target.checked }))} /> <Mic size={15} /> Micrófono</label>
+                {want.camera && (
+                  <select value={cam} onFocus={listCams} onChange={e => setCam(e.target.value)} aria-label="Cámara">
+                    <option value="">Cámara predeterminada</option>
+                    {devices.map(d => <option key={d.deviceId} value={d.deviceId}>{d.label || d.deviceId.slice(0, 8)}</option>)}
+                  </select>
+                )}
               </div>
+              <button className="btn primary" onClick={startShare}><Cast size={16} /> Empezar a compartir</button>
             </>
           ) : (
             <div className="row wrap">
@@ -197,7 +217,9 @@ export default function ScreenView({ link, kind, remoteControl }: { link: Link; 
           onPointerMove={onMove} onPointerDown={onDown} onPointerUp={onUp} onPointerCancel={onUp}
           onWheel={e => send({ k: 'mouse', a: 'wheel', dy: e.deltaY, ...norm(e) })}
           onContextMenu={e => { if (control) e.preventDefault() }} />
-        {!stream && <div className="video-empty">{mode === 'view' ? status : 'Aún no compartes nada'}</div>}
+        {/* Cámara en un recuadro (el micrófono suena desde aquí) */}
+        <video ref={pip} className={`pip ${pipStream ? '' : 'hidden'}`} autoPlay playsInline muted={sharing} />
+        {!hasMedia && <div className="video-empty">{mode === 'view' ? status : 'Aún no compartes nada'}</div>}
         <input ref={kb} className="kb-capture" aria-label="Teclado remoto" autoCapitalize="off" autoCorrect="off" autoComplete="off" spellCheck={false}
           onBeforeInput={e => {
             const ev = e.nativeEvent as InputEvent

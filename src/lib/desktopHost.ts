@@ -1,7 +1,7 @@
 import { sb } from './supabase'
 import { desktop } from './native'
 import { DesktopPcAgent } from './desktopAgent'
-import { Link, ScreenSharer } from './devices'
+import { Link, ScreenSharer, SCREEN_CONSTRAINTS, type Sources } from './devices'
 import { P2PAnswerer } from './p2p'
 import type { Device } from './types'
 
@@ -23,6 +23,7 @@ class DesktopHost {
   private studioId?: string
   private userId?: string
   private starting = false
+  private retry?: ReturnType<typeof setTimeout>
 
   subscribe(l: () => void) { this.listeners.add(l); return () => { this.listeners.delete(l) } }
   private emit() { this.listeners.forEach(l => l()) }
@@ -36,14 +37,7 @@ class DesktopHost {
       await this.stop()
       this.studioId = studioId; this.userId = userId
       const info = await desktop.info()
-      const { data } = await sb().from('devices').select('*').eq('studio_id', studioId).eq('kind', 'pc')
-      let dev = ((data ?? []) as Device[]).find(d => (d.config as { hostId?: string })?.hostId === info.hostId)
-      if (!dev) {
-        const ins = await sb().from('devices').insert({ studio_id: studioId, name: info.hostname, kind: 'pc', config: { hostId: info.hostId }, created_by: userId }).select().single()
-        if (ins.error) throw new Error(ins.error.message)
-        dev = ins.data as Device
-        this.log(`PC registrado como «${dev.name}»`)
-      }
+      const dev = await this.resolveDevice(studioId, userId, info)
       this.agent = new DesktopPcAgent(dev.id, { hostname: info.hostname, version: info.version, platform: info.platform })
       this.agent.onLog = m => this.log(m)
       await this.agent.start()
@@ -55,7 +49,31 @@ class DesktopHost {
         .subscribe()
     } catch (e) {
       this.patch({ error: e instanceof Error ? e.message : String(e), running: false })
+      // Sin red al arrancar con el sistema, etc.: reintenta (y NUNCA crea un dispositivo si la consulta falló)
+      this.retry = setTimeout(() => { void this.start(studioId, userId) }, 10_000)
     } finally { this.starting = false }
+  }
+
+  /** Este PC = un único dispositivo: se recuerda su id y se limpian duplicados antiguos. */
+  private async resolveDevice(studioId: string, userId: string, info: { hostname: string; hostId: string }): Promise<Device> {
+    const settings = await desktop!.getSettings()
+    const { data, error } = await sb().from('devices').select('*').eq('studio_id', studioId).eq('kind', 'pc')
+    if (error) throw new Error('No se pudo consultar tus dispositivos: ' + error.message)
+    const list = (data ?? []) as Device[]
+    const hostOf = (d: Device) => (d.config as { hostId?: string })?.hostId
+    const mine = list.filter(d => hostOf(d) === info.hostId).sort((a, b) => a.created_at.localeCompare(b.created_at))
+    let dev = (settings.deviceId && list.find(d => d.id === settings.deviceId)) || mine[0]
+    if (dev) {
+      for (const d of mine) if (d.id !== dev.id) await sb().from('devices').delete().eq('id', d.id)   // duplicados
+      if (hostOf(dev) !== info.hostId) await sb().from('devices').update({ config: { ...(dev.config as object), hostId: info.hostId } }).eq('id', dev.id)
+    } else {
+      const ins = await sb().from('devices').insert({ studio_id: studioId, name: info.hostname, kind: 'pc', config: { hostId: info.hostId }, created_by: userId }).select().single()
+      if (ins.error) throw new Error(ins.error.message)
+      dev = ins.data as Device
+      this.log(`PC registrado como «${dev.name}»`)
+    }
+    if (settings.deviceId !== dev.id) await desktop!.setSettings({ deviceId: dev.id })
+    return dev
   }
 
   /** Canal del propio PC: ratón/teclado remotos y pantalla bajo demanda. */
@@ -69,7 +87,14 @@ class DesktopHost {
       else if (m?.k === 'key') desktop!.inputKey(m)
     })
     if (s.allowScreen) {
-      this.sharer = new ScreenSharer(this.link, () => navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 60 }, audio: true }), n => this.patch({ viewers: n }))
+      this.sharer = new ScreenSharer(this.link, async (): Promise<Sources> => {
+        const cur = await desktop!.getSettings()
+        const src: Sources = { screen: await navigator.mediaDevices.getDisplayMedia(SCREEN_CONSTRAINTS(cur.screenQuality === 'native')) }
+        if (cur.shareCamera || cur.shareMic) {
+          try { src.camera = await navigator.mediaDevices.getUserMedia({ video: cur.shareCamera ? { width: { ideal: 1280 }, frameRate: { ideal: 30 } } : false, audio: cur.shareMic }) } catch { /* sin permiso o sin cámara */ }
+        }
+        return src
+      }, n => this.patch({ viewers: n }))
     }
     await this.link.ready.catch(e => this.patch({ error: e instanceof Error ? e.message : String(e) }))
   }
@@ -95,6 +120,7 @@ class DesktopHost {
   async applySettings() { if (this.state.deviceId) await this.openLink(this.state.deviceId) }
 
   async stop() {
+    if (this.retry) { clearTimeout(this.retry); this.retry = undefined }
     this.agent?.stop(); this.agent = undefined
     this.sharer?.stop(); this.sharer = undefined
     this.p2p?.stop(); this.p2p = undefined

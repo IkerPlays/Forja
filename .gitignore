@@ -12,3 +12,4 @@ bridge/.session.json
 public/forja-config.json
 desktop/node_modules
 desktop/dist
+desktop/dist-core

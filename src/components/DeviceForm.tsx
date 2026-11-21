@@ -6,8 +6,8 @@ import type { Device, DeviceKind } from '../lib/types'
 import { Field, Modal, useToast } from './ui'
 import { errMsg } from '../lib/util'
 
-export default function DeviceForm({ studioId, kind, device, onClose, onSaved }: {
-  studioId: string; kind: DeviceKind; device?: Device; onClose: () => void; onSaved: (id: string) => void
+export default function DeviceForm({ studioId, kind, device, existing = [], onClose, onSaved }: {
+  studioId: string; kind: DeviceKind; device?: Device; existing?: Device[]; onClose: () => void; onSaved: (id: string) => void
 }) {
   const { session } = useAuth()
   const toast = useToast()
@@ -19,6 +19,7 @@ export default function DeviceForm({ studioId, kind, device, onClose, onSaved }:
   const [ftpPass, setFtpPass] = useState(String(c.ftp_pass ?? ''))
   const [inputPort, setInputPort] = useState(String(c.input_port ?? 4950))
   const [code, setCode] = useState('')
+  const [relink, setRelink] = useState('')   // vincular a una consola que ya existe (evita duplicados)
   const [busy, setBusy] = useState(false)
 
   async function submit(e: React.FormEvent) {
@@ -28,7 +29,7 @@ export default function DeviceForm({ studioId, kind, device, onClose, onSaved }:
       ? { ip: ip.trim(), ftp_port: Number(ftpPort) || 5000, ftp_user: ftpUser.trim(), ftp_pass: ftpPass, input_port: Number(inputPort) || 4950 }
       : {}
     if (kind === '3ds' && !device) {
-      const { data: id, error: pe } = await sb().rpc('device_pair_approve', { p_code: code, p_studio: studioId, p_name: name.trim() })
+      const { data: id, error: pe } = await sb().rpc('device_pair_approve', { p_code: code, p_studio: studioId, p_name: name.trim(), p_device: relink || null })
       if (pe) { setBusy(false); return toast(errMsg(pe), 'err') }
       if (ip.trim() || ftpUser || ftpPass) await sb().from('devices').update({ config }).eq('id', id as string)
       setBusy(false)
@@ -49,6 +50,14 @@ export default function DeviceForm({ studioId, kind, device, onClose, onSaved }:
         <Field label="Nombre"><input value={name} onChange={e => setName(e.target.value)} required maxLength={80} autoFocus /></Field>
         {kind === '3ds' && (
           <>
+            {!device && existing.length > 0 && (
+              <Field label="¿Es una consola nueva?" hint="Si la app de la 3DS pidió código otra vez (reinstalada, borraste la SD…), vincúlala a la consola que ya tienes para no duplicarla.">
+                <select value={relink} onChange={e => setRelink(e.target.value)}>
+                  <option value="">Sí, es una consola nueva</option>
+                  {existing.map(d => <option key={d.id} value={d.id}>No, es «{d.name}»</option>)}
+                </select>
+              </Field>
+            )}
             {!device && (
               <Field label="Código que muestra la 3DS" hint="Abre la app Forja3DS en la consola: te enseña un código de 6 caracteres (p. ej. K7M2QX).">
                 <input value={code} onChange={e => setCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))} maxLength={6} required

@@ -52,7 +52,7 @@ export default function DevicesPage({ kind, base, title, sub, icon, dirActions }
           ) : <Empty title="Elige un dispositivo" />}
         </div>
       )}
-      {adding && <DeviceForm studioId={active.id} kind={kind} onClose={() => setAdding(false)}
+      {adding && <DeviceForm studioId={active.id} kind={kind} existing={devices} onClose={() => setAdding(false)}
         onSaved={id => { setAdding(false); void reload(); nav(`${base}/${id}`) }} />}
     </div>
   )

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { FolderPlus, HardDrive, Monitor, MousePointer2, Power, Radio, Trash2, Eye } from 'lucide-react'
+import { RefreshCw, FolderPlus, HardDrive, Monitor, MousePointer2, Power, Radio, Trash2, Eye, Video } from 'lucide-react'
 import { desktop, type DesktopSettings } from '../lib/native'
 import { useHostState } from '../components/DesktopHostMount'
 import { desktopHost } from '../lib/desktopHost'
@@ -22,7 +22,7 @@ export default function ThisPc() {
   const host = useHostState()
   const [s, setS] = useState<DesktopSettings | null>(null)
   const [relay, setRelay] = useState<{ on: boolean; addresses: string[]; requests: number; error?: string } | null>(null)
-  const [info, setInfo] = useState<{ hostname: string; version: string; input: boolean; lan: string[] } | null>(null)
+  const [info, setInfo] = useState<{ hostname: string; version: string; shellVersion?: string; input: boolean; lan: string[] } | null>(null)
 
   const load = useCallback(async () => {
     if (!desktop) return
@@ -83,6 +83,14 @@ export default function ThisPc() {
       </section>
 
       <section className="panel stack">
+        <h2><Video size={17} /> Vídeo y videollamada</h2>
+        <Toggle on={s.shareCamera} onChange={v => set({ shareCamera: v })} label="Incluir mi cámara" hint="Quien mire este PC verá también tu cámara en un recuadro (como una videollamada)." />
+        <Toggle on={s.shareMic} onChange={v => set({ shareMic: v })} label="Incluir mi micrófono" hint="Se oirá tu voz mientras alguien mira." />
+        <label className="toggle-row"><div><strong>Calidad de la pantalla</strong><small className="muted">Fluida: hasta 1080p a 60 fps (recomendada). Nativa: resolución completa; puede ir a menos fps.</small></div>
+          <select value={s.screenQuality} onChange={e => set({ screenQuality: e.target.value as 'fluid' | 'native' })}><option value="fluid">Fluida (1080p · 60 fps)</option><option value="native">Nativa</option></select></label>
+      </section>
+
+      <section className="panel stack">
         <h2><Radio size={17} /> Puente para la 3DS</h2>
         <Toggle on={s.relay} onChange={v => set({ relay: v })} label="Puente local para la 3DS"
           hint="Si la consola no consigue conectarse a internet por HTTPS, se conecta a este PC por tu WiFi y este PC hace de intermediario. La consola lo encuentra sola." />
@@ -100,6 +108,21 @@ export default function ThisPc() {
           </div>
         )}
         <p className="muted small">El mando de la 3DS (botones y pantalla táctil) también pasa por este PC cuando la consola tiene IP en su ficha.</p>
+      </section>
+
+      <section className="panel stack">
+        <h2><RefreshCw size={17} /> Actualizaciones</h2>
+        <p className="muted small">Versión {info.version}{info.shellVersion && info.shellVersion !== info.version ? ` (instalador ${info.shellVersion})` : ''}. Forja busca actualizaciones sola al abrirse y cada 6 horas; si hay una, se descarga y se aplica al reiniciar (en segundo plano, sola).</p>
+        <div className="row wrap">
+          <button className="btn" onClick={async () => {
+            const r = await desktop!.checkUpdate()
+            if (!r.ok) return toast('No se pudo comprobar: ' + (r.error || ''), 'err')
+            if (r.downloaded) toast(`Actualización a v${r.latest} descargada. Reinicia para aplicarla.`)
+            else toast(r.latest && r.latest !== r.current ? `Hay v${r.latest} (ya descargada)` : 'Ya tienes la última versión')
+          }}><RefreshCw size={14} /> Buscar actualizaciones</button>
+          <button className="btn" onClick={() => void desktop!.applyUpdate()}>Reiniciar Forja</button>
+        </div>
+        <p className="muted small">Se actualiza la lógica (archivos, control, puente 3DS…). La interfaz web se actualiza siempre sola. Si cambia el propio motor (Electron), se avisa de instalar el nuevo instalador.</p>
       </section>
 
       <section className="panel stack">

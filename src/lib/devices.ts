@@ -69,7 +69,7 @@ export class CommandClient {
  * Canal privado "device:<id>": señalización WebRTC, entrada (mando,    *
  * ratón, teclado) y presencia (quién comparte pantalla).               *
  * ------------------------------------------------------------------ */
-export interface Signal { from: string; to?: string; kind: 'join' | 'offer' | 'answer' | 'ice' | 'leave' | 'fs-offer' | 'fs-answer' | 'fs-ice'; data?: any }
+export interface Signal { from: string; to?: string; meta?: Record<string, string>; kind: 'join' | 'offer' | 'answer' | 'ice' | 'leave' | 'fs-offer' | 'fs-answer' | 'fs-ice'; data?: any }
 export type Role = 'viewer' | 'sharer' | 'bridge' | 'files'
 
 export type Peer = { id: string; roles: Role[] }
@@ -185,14 +185,29 @@ class Peer_ {
   close() { try { this.pc.close() } catch { /* noop */ } }
 }
 
+/** Lo que emite un compartidor: pantalla y/o cámara (con micrófono). Se ven a la vez, como en una videollamada. */
+export interface Sources { screen?: MediaStream; camera?: MediaStream }
+export interface ViewerStreams { screen?: MediaStream; camera?: MediaStream }
+
+/** Pantalla fluida: 60 fps, "motion" y bitrate alto en red local. */
+export function tuneForMotion(stream: MediaStream) {
+  for (const t of stream.getVideoTracks()) { try { (t as MediaStreamTrack & { contentHint: string }).contentHint = 'motion' } catch { /* noop */ } }
+}
+export const SCREEN_CONSTRAINTS = (native: boolean): MediaStreamConstraints => ({
+  video: native
+    ? { frameRate: { ideal: 60, max: 60 } }
+    : { frameRate: { ideal: 60, max: 60 }, width: { ideal: 1920, max: 1920 }, height: { ideal: 1080, max: 1080 } },
+  audio: true,
+})
+
 export class ScreenSharer {
   private peers = new Map<string, Peer_>()
   private off: () => void
-  private stream: MediaStream | null = null
+  private src: Sources | null = null
   private idle: ReturnType<typeof setTimeout> | null = null
-  /** `source` puede ser un MediaStream ya listo o una función que lo captura cuando llega el primer espectador. */
-  constructor(private link: Link, private source: MediaStream | (() => Promise<MediaStream>), private onViewers: (n: number) => void) {
-    if (!(typeof source === 'function')) this.stream = source
+  /** `source` puede ser ya las fuentes o una función que las captura cuando llega el primer espectador. */
+  constructor(private link: Link, private source: Sources | (() => Promise<Sources>), private onViewers: (n: number) => void) {
+    if (typeof source !== 'function') this.src = source
     this.off = link.onSignal(async s => {
       if (s.kind === 'join') await this.offerTo(s.from)
       else if (s.kind === 'answer') await this.peers.get(s.from)?.setRemote(s.data)
@@ -200,45 +215,53 @@ export class ScreenSharer {
       else if (s.kind === 'leave') this.drop(s.from)
     })
   }
-  private async ensureStream() {
-    if (this.stream) return this.stream
-    this.stream = await (this.source as () => Promise<MediaStream>)()
-    return this.stream
+  private async ensure() {
+    if (this.src) return this.src
+    this.src = await (this.source as () => Promise<Sources>)()
+    return this.src
+  }
+  private release() {
+    for (const st of [this.src?.screen, this.src?.camera]) st?.getTracks().forEach(t => t.stop())
+    this.src = null
   }
   private async offerTo(viewerId: string) {
     this.drop(viewerId)
     if (this.idle) { clearTimeout(this.idle); this.idle = null }
-    const stream = await this.ensureStream()
+    const src = await this.ensure()
     const peer = new Peer_(this.link, viewerId, st => { if (st === 'failed' || st === 'closed' || st === 'disconnected') this.drop(viewerId) })
     this.peers.set(viewerId, peer)
-    stream.getTracks().forEach(t => peer.pc.addTrack(t, stream))
-    // Prioriza fluidez sobre nitidez cuando falta ancho de banda (juegos)
-    peer.pc.getSenders().forEach(snd => {
-      if (snd.track?.kind === 'video') {
-        const p = snd.getParameters()
-        p.degradationPreference = 'maintain-framerate'
-        if (!p.encodings?.length) p.encodings = [{}]
-        p.encodings[0].maxBitrate = 6_000_000
-        void snd.setParameters(p).catch(() => {})
-      }
-    })
+    const meta: Record<string, string> = {}
+    if (src.screen) { tuneForMotion(src.screen); meta.screen = src.screen.id; src.screen.getTracks().forEach(t => peer.pc.addTrack(t, src.screen!)) }
+    if (src.camera) { meta.camera = src.camera.id; src.camera.getTracks().forEach(t => peer.pc.addTrack(t, src.camera!)) }
+    // La pantalla manda: máxima fluidez (60 fps) y bitrate alto; la cámara, más modesta
+    for (const snd of peer.pc.getSenders()) {
+      if (snd.track?.kind !== 'video') continue
+      const isScreen = !!src.screen && src.screen.getVideoTracks().includes(snd.track)
+      const p = snd.getParameters()
+      p.degradationPreference = isScreen ? 'maintain-framerate' : 'balanced'
+      if (!p.encodings?.length) p.encodings = [{}]
+      p.encodings[0].maxBitrate = isScreen ? 16_000_000 : 2_500_000
+      p.encodings[0].maxFramerate = isScreen ? 60 : 30
+      p.encodings[0].priority = 'high'; p.encodings[0].networkPriority = 'high'
+      void snd.setParameters(p).catch(() => {})
+    }
     const offer = await peer.pc.createOffer()
     await peer.pc.setLocalDescription(offer)
-    await this.link.signal({ kind: 'offer', to: viewerId, data: offer })
+    await this.link.signal({ kind: 'offer', to: viewerId, data: offer, meta })
     this.onViewers(this.peers.size)
   }
   private drop(id: string) {
     this.peers.get(id)?.close(); this.peers.delete(id); this.onViewers(this.peers.size)
-    // Con captura bajo demanda, se libera la pantalla cuando ya nadie mira
-    if (!this.peers.size && typeof this.source === 'function' && this.stream && !this.idle) {
-      this.idle = setTimeout(() => { this.stream?.getTracks().forEach(t => t.stop()); this.stream = null; this.idle = null }, 15_000)
+    // Con captura bajo demanda, se libera todo cuando ya nadie mira
+    if (!this.peers.size && typeof this.source === 'function' && this.src && !this.idle) {
+      this.idle = setTimeout(() => { this.release(); this.idle = null }, 15_000)
     }
   }
   stop() {
     this.off()
     if (this.idle) clearTimeout(this.idle)
     for (const id of [...this.peers.keys()]) this.drop(id)
-    this.stream?.getTracks().forEach(t => t.stop())
+    this.release()
   }
 }
 
@@ -247,9 +270,11 @@ export class ScreenViewer {
   private off: () => void
   private offPresence: () => void
   private joined = false
-  constructor(private link: Link, private onStream: (s: MediaStream | null) => void, private onStatus: (s: string) => void) {
+  private meta: Record<string, string> = {}
+  private streams = new Map<string, MediaStream>()
+  constructor(private link: Link, private onStream: (s: ViewerStreams | null) => void, private onStatus: (s: string) => void) {
     this.off = link.onSignal(async s => {
-      if (s.kind === 'offer') await this.accept(s.from, s.data)
+      if (s.kind === 'offer') await this.accept(s.from, s.data, s.meta ?? {})
       else if (s.kind === 'ice') await this.peer?.addIce(s.data)
       else if (s.kind === 'leave' && this.peer?.remoteId === s.from) this.reset('El emisor dejó de compartir')
     })
@@ -260,21 +285,33 @@ export class ScreenViewer {
       if (!sharer && !this.peer) { this.joined = false; this.onStatus('Nadie está compartiendo pantalla en este dispositivo') }
     })
   }
-  private async accept(from: string, offer: RTCSessionDescriptionInit) {
-    this.peer?.close()
+  private emit() {
+    const all = [...this.streams.values()]
+    const screen = this.streams.get(this.meta.screen) ?? (this.meta.screen ? undefined : all[0])
+    const camera = this.streams.get(this.meta.camera)
+    this.onStream(all.length ? { screen: screen ?? (camera ? undefined : all[0]), camera } : null)
+  }
+  private async accept(from: string, offer: RTCSessionDescriptionInit, meta: Record<string, string>) {
+    this.peer?.close(); this.streams.clear(); this.meta = meta
     const peer = new Peer_(this.link, from, st => {
       if (st === 'connected') this.onStatus('En directo')
       if (st === 'failed') this.reset('Conexión fallida. Si no estáis en la misma red hace falta un servidor TURN.')
     })
     this.peer = peer
-    peer.pc.ontrack = e => this.onStream(e.streams[0] ?? new MediaStream([e.track]))
+    peer.pc.ontrack = e => {
+      const st = e.streams[0] ?? new MediaStream([e.track])
+      this.streams.set(st.id, st)
+      // Latencia mínima en el reproductor
+      try { (e.receiver as RTCRtpReceiver & { jitterBufferTarget?: number | null }).jitterBufferTarget = 0 } catch { /* noop */ }
+      this.emit()
+    }
     await peer.setRemote(offer)
     const answer = await peer.pc.createAnswer()
     await peer.pc.setLocalDescription(answer)
     await this.link.signal({ kind: 'answer', to: from, data: answer })
   }
   private reset(msg: string) {
-    this.peer?.close(); this.peer = null; this.joined = false
+    this.peer?.close(); this.peer = null; this.joined = false; this.streams.clear()
     this.onStream(null); this.onStatus(msg)
   }
   leave() {
