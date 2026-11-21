@@ -12,8 +12,9 @@ Usa un proyecto de Supabase **propio de Forja** (no lo mezcles con otros).
    * la clave **anon / publishable** (es pública por diseño; la seguridad la ponen las políticas RLS).
 4. **Authentication → Providers**: el correo + contraseña ya viene activo.
    * Si quieres entrar sin confirmar correo mientras pruebas: Authentication → Sign In / Providers → Email → desactiva *Confirm email*.
-5. **Authentication → URL Configuration**: en *Site URL* y *Redirect URLs* pon la URL de tu web de Netlify (y `http://localhost:5173` si desarrollas).
-6. **Realtime** (Project Settings → Realtime): comprueba que *Allow public access* esté **desactivado** (así solo funcionan los canales privados que protege `02_app.sql`).
+5. **Authentication → Sign In / Providers → Allow anonymous sign-ins**: actívalo si vas a usar la 3DS (la consola entra así, con código de emparejado).
+6. **Authentication → URL Configuration**: en *Site URL* y *Redirect URLs* pon la URL de tu web de Netlify (y `http://localhost:5173` si desarrollas).
+7. **Realtime** (Project Settings → Realtime): comprueba que *Allow public access* esté **desactivado** (así solo funcionan los canales privados que protege `02_app.sql`).
 
 ## 2 · Netlify (la web)
 

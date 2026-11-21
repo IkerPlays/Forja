@@ -18,6 +18,7 @@ export default function DeviceForm({ studioId, kind, device, onClose, onSaved }:
   const [ftpUser, setFtpUser] = useState(String(c.ftp_user ?? ''))
   const [ftpPass, setFtpPass] = useState(String(c.ftp_pass ?? ''))
   const [inputPort, setInputPort] = useState(String(c.input_port ?? 4950))
+  const [code, setCode] = useState('')
   const [busy, setBusy] = useState(false)
 
   async function submit(e: React.FormEvent) {
@@ -26,6 +27,13 @@ export default function DeviceForm({ studioId, kind, device, onClose, onSaved }:
     const config = kind === '3ds'
       ? { ip: ip.trim(), ftp_port: Number(ftpPort) || 5000, ftp_user: ftpUser.trim(), ftp_pass: ftpPass, input_port: Number(inputPort) || 4950 }
       : {}
+    if (kind === '3ds' && !device) {
+      const { data: id, error: pe } = await sb().rpc('device_pair_approve', { p_code: code, p_studio: studioId, p_name: name.trim() })
+      if (pe) { setBusy(false); return toast(errMsg(pe), 'err') }
+      if (ip.trim() || ftpUser || ftpPass) await sb().from('devices').update({ config }).eq('id', id as string)
+      setBusy(false)
+      return onSaved(id as string)
+    }
     const q = device
       ? sb().from('devices').update({ name: name.trim(), config }).eq('id', device.id).select('id').single()
       : sb().from('devices').insert({ studio_id: studioId, name: name.trim(), kind, config, created_by: session!.user.id }).select('id').single()
@@ -41,7 +49,13 @@ export default function DeviceForm({ studioId, kind, device, onClose, onSaved }:
         <Field label="Nombre"><input value={name} onChange={e => setName(e.target.value)} required maxLength={80} autoFocus /></Field>
         {kind === '3ds' && (
           <>
-            <p className="muted small">Para archivos y pantalla no hace falta nada más: instala <strong>Forja3DS</strong> en la consola (te lo explicamos al crearla). Lo de abajo solo sirve para el <em>mando</em> con el bridge local opcional.</p>
+            {!device && (
+              <Field label="Código que muestra la 3DS" hint="Abre la app Forja3DS en la consola: te enseña un código de 6 caracteres (p. ej. K7M2QX).">
+                <input value={code} onChange={e => setCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))} maxLength={6} required
+                  placeholder="K7M2QX" autoCapitalize="characters" autoComplete="off" style={{ letterSpacing: '.3em', fontWeight: 700, textTransform: 'uppercase' }} />
+              </Field>
+            )}
+            <p className="muted small">Lo de abajo solo sirve para el <em>mando</em> con el bridge local opcional.</p>
             <details className="adv"><summary>Avanzado: mando por red local (bridge opcional)</summary>
             <Field label="IP de la 3DS en tu WiFi" hint="Ajustes → Internet → Ajustes de conexión.">
               <input value={ip} onChange={e => setIp(e.target.value)} placeholder="192.168.1.50" inputMode="decimal" />
@@ -58,7 +72,7 @@ export default function DeviceForm({ studioId, kind, device, onClose, onSaved }:
           </>
         )}
         {kind === 'pc' && <p className="muted small">Después de crearlo, abre Forja en ese PC → pestaña Archivos → <em>Elegir carpeta</em>. No hay que instalar nada.</p>}
-        <button className="btn primary" disabled={busy}>{busy && <Loader2 size={14} className="spin" />} {device ? 'Guardar' : 'Añadir'}</button>
+        <button className="btn primary" disabled={busy || (kind === '3ds' && !device && code.length < 6)}>{busy && <Loader2 size={14} className="spin" />} {device ? 'Guardar' : kind === '3ds' ? 'Vincular consola' : 'Añadir'}</button>
       </form>
     </Modal>
   )

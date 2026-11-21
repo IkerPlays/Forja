@@ -202,6 +202,25 @@ create table if not exists public.device_commands (
 );
 create index if not exists device_commands_device_idx on public.device_commands (device_id, created_at desc);
 
+
+-- Consolas emparejadas con código: la 3DS entra con una cuenta anónima y solo accede a SU dispositivo
+create table if not exists public.device_links (
+  device_id  uuid not null references public.devices(id) on delete cascade,
+  user_id    uuid not null references public.profiles(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key (device_id, user_id)
+);
+create index if not exists device_links_user_idx on public.device_links (user_id);
+
+create table if not exists public.device_pairings (
+  code       text primary key,
+  user_id    uuid not null references public.profiles(id) on delete cascade,
+  device_id  uuid references public.devices(id) on delete set null,
+  approved   boolean not null default false,
+  created_at timestamptz not null default now()
+);
+create index if not exists device_pairings_user_idx on public.device_pairings (user_id);
+
 -- Juegos del estudio
 create table if not exists public.games (
   id          uuid primary key default gen_random_uuid(),
@@ -268,6 +287,7 @@ returns boolean language sql stable security definer set search_path = public as
   select exists (select 1 from public.devices d
                  join public.studio_members m on m.studio_id = d.studio_id
                  where d.id = did and m.user_id = auth.uid())
+      or exists (select 1 from public.device_links l where l.device_id = did and l.user_id = auth.uid())
 $$;
 
 -- ¿Comparto estudio o proyecto con esta persona? (para ver su perfil)
@@ -619,6 +639,62 @@ begin
    where id = p_id and public.can_access_device(device_id);
 end $$;
 
+
+-- Emparejado por código (la 3DS entra como usuario anónimo y muestra un código)
+create or replace function public.device_pair_poll()
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  v_dev uuid;
+  v_code text;
+  v_alpha constant text := 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  i int;
+begin
+  if auth.uid() is null then raise exception 'no autenticado'; end if;
+  select l.device_id into v_dev from public.device_links l where l.user_id = auth.uid() limit 1;
+  if v_dev is not null then return jsonb_build_object('device_id', v_dev); end if;
+
+  delete from public.device_pairings where created_at < now() - interval '30 minutes' and not approved;
+  select code into v_code from public.device_pairings where user_id = auth.uid() and not approved limit 1;
+  if v_code is null then
+    loop
+      v_code := '';
+      for i in 1..6 loop
+        v_code := v_code || substr(v_alpha, 1 + floor(random() * length(v_alpha))::int, 1);
+      end loop;
+      begin
+        insert into public.device_pairings (code, user_id) values (v_code, auth.uid());
+        exit;
+      exception when unique_violation then null;
+      end;
+    end loop;
+  end if;
+  return jsonb_build_object('code', v_code);
+end $$;
+
+-- Un miembro del estudio aprueba el código: crea el dispositivo (o re-enlaza uno existente)
+create or replace function public.device_pair_approve(p_code text, p_studio uuid, p_name text default '3DS', p_device uuid default null)
+returns uuid language plpgsql security definer set search_path = public as $$
+declare
+  v_pair public.device_pairings%rowtype;
+  v_dev uuid := p_device;
+begin
+  if not public.is_studio_member(p_studio) then raise exception 'sin permiso'; end if;
+  select * into v_pair from public.device_pairings
+   where code = upper(trim(p_code)) and not approved and created_at > now() - interval '30 minutes'
+   for update;
+  if v_pair.code is null then raise exception 'Código no válido o caducado'; end if;
+  if v_dev is null then
+    insert into public.devices (studio_id, name, kind, created_by)
+    values (p_studio, left(coalesce(nullif(trim(p_name), ''), '3DS'), 80), '3ds', auth.uid())
+    returning id into v_dev;
+  elsif not exists (select 1 from public.devices where id = v_dev and studio_id = p_studio) then
+    raise exception 'dispositivo no encontrado';
+  end if;
+  insert into public.device_links (device_id, user_id) values (v_dev, v_pair.user_id) on conflict do nothing;
+  update public.device_pairings set approved = true, device_id = v_dev where code = v_pair.code;
+  return v_dev;
+end $$;
+
 -- ---------------------------------------------------------------------
 -- 4 · VISTA DE PROGRESO (Tareas ↔ Juegos)
 -- ---------------------------------------------------------------------
@@ -640,7 +716,7 @@ begin
   foreach t in array array[
     'studios','studio_members','studio_invites','projects','project_members','project_invites',
     'lists','cards','project_labels','card_labels','card_assignees','card_checklist','card_comments',
-    'project_messages','activity','devices','device_commands','games'
+    'project_messages','activity','devices','device_commands','games','device_links','device_pairings'
   ] loop
     execute format('alter table public.%I enable row level security', t);
   end loop;
@@ -795,6 +871,15 @@ drop policy if exists "device_commands: borrar" on public.device_commands;
 create policy "device_commands: borrar" on public.device_commands for delete to authenticated
   using (public.can_access_device(device_id));
 
+
+-- Consolas vinculadas: los miembros del estudio las ven y pueden desvincularlas
+drop policy if exists "device_links: ver" on public.device_links;
+create policy "device_links: ver" on public.device_links for select to authenticated
+  using (exists (select 1 from public.devices d where d.id = device_id and public.is_studio_member(d.studio_id)));
+drop policy if exists "device_links: borrar" on public.device_links;
+create policy "device_links: borrar" on public.device_links for delete to authenticated
+  using (exists (select 1 from public.devices d where d.id = device_id and public.is_studio_member(d.studio_id)));
+
 -- Permisos de las funciones: nada para anónimos
 do $$
 declare f text;
@@ -804,7 +889,8 @@ begin
     'can_access_device(uuid)','shares_context(uuid)','rt_topic_allowed(text)',
     'create_studio(text)','invite_to_studio(uuid,text,text)','invite_to_project(uuid,text,text)',
     'claim_invites()','create_project_for_game(uuid)','device_heartbeat(uuid,jsonb)',
-    'device_command_claim(uuid)','device_command_finish(uuid,text,jsonb,text)'
+    'device_command_claim(uuid)','device_command_finish(uuid,text,jsonb,text)',
+    'device_pair_poll()','device_pair_approve(text,uuid,text,uuid)'
   ] loop
     execute format('revoke all on function public.%s from public, anon', f);
     execute format('grant execute on function public.%s to authenticated', f);
@@ -848,10 +934,18 @@ on conflict (id) do update set public = excluded.public, file_size_limit = exclu
 create or replace function public.storage_studio_allowed(object_name text)
 returns boolean language plpgsql stable security definer set search_path = public as $$
 declare
-  v_first text := (string_to_array(object_name, '/'))[1];
+  v_parts text[] := string_to_array(object_name, '/');
+  v_first text := v_parts[1];
+  v_second text := v_parts[2];
 begin
   if v_first !~ '^[0-9a-f-]{36}$' then return false; end if;
-  return public.is_studio_member(v_first::uuid);
+  if public.is_studio_member(v_first::uuid) then return true; end if;
+  -- Una consola emparejada solo puede tocar archivos de su propio dispositivo: <estudio>/<dispositivo>/…
+  if v_second ~ '^[0-9a-f-]{36}$' then
+    return exists (select 1 from public.device_links l join public.devices d on d.id = l.device_id
+                   where l.user_id = auth.uid() and d.id = v_second::uuid and d.studio_id = v_first::uuid);
+  end if;
+  return false;
 exception when others then
   return false;
 end $$;

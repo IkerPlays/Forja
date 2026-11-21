@@ -125,7 +125,7 @@ export default function DeviceConsole({ device, onChanged, onDeleted, startPath,
               <h4><Activity size={15} /> Estado</h4>
               <p>{online ? 'El dispositivo está conectado y atendiendo órdenes.' : is3ds ? 'La 3DS no está conectada: abre la app Forja3DS en la consola (con WiFi).' : 'Este PC no está compartiendo: abre Forja en él, pestaña Archivos, y elige una carpeta.'}</p>
               <div className="row wrap">
-                {is3ds && <button className="btn" onClick={() => setHelp(true)}><Terminal size={15} /> Instrucciones de la 3DS</button>}
+                {is3ds && <button className="btn" onClick={() => setHelp(true)}><Terminal size={15} /> Instalar / vincular la 3DS</button>}
                 <button className="btn" onClick={() => setEditing(true)}><Settings2 size={15} /> Editar datos</button>
                 <button className="btn danger" onClick={remove}><Trash2 size={15} /> Eliminar</button>
               </div>
@@ -145,37 +145,42 @@ export default function DeviceConsole({ device, onChanged, onDeleted, startPath,
 }
 
 function OfflineHint({ onHelp }: { onHelp: () => void }) {
-  return <div className="callout">La 3DS no está conectada, así que no se pueden ver sus archivos. Abre <strong>Forja3DS</strong> en la consola. <button className="link-btn" onClick={onHelp}>Ver cómo instalarla</button></div>
+  return <div className="callout">La 3DS no está conectada, así que no se pueden ver sus archivos. Abre <strong>Forja3DS</strong> en la consola. <button className="link-btn" onClick={onHelp}>Ver cómo vincularla</button></div>
 }
 
-/** config.txt listo para la tarjeta SD: ya lleva la URL, la clave pública y el ID de este dispositivo. */
+/** Instrucciones de la app de la 3DS + re-emparejado con código. */
 function AgentHelp({ device, onClose }: { device: Device; onClose: () => void }) {
-  const { profile } = useAuth()
-  const cfg = readConfig()
-  const text = [
-    '# Forja3DS — copia este archivo a la tarjeta SD en /3ds/forja/config.txt',
-    `url=${cfg.url}`, `anon=${cfg.key}`,
-    '# Cuenta de Forja que usará la consola (recomendado: una cuenta propia para la 3DS, añadida al estudio en Equipo)',
-    `email=${profile?.email ?? ''}`, 'password=', `device=${device.id}`, '',
-  ].join('\n')
-  const download = () => {
-    const a = document.createElement('a')
-    a.href = URL.createObjectURL(new Blob([text], { type: 'text/plain' })); a.download = 'config.txt'
-    document.body.appendChild(a); a.click(); a.remove()
+  const toast = useToast()
+  const [code, setCode] = useState('')
+  const [busy, setBusy] = useState(false)
+  async function pair(e: React.FormEvent) {
+    e.preventDefault()
+    setBusy(true)
+    const { error } = await sb().rpc('device_pair_approve', { p_code: code, p_studio: device.studio_id, p_name: device.name, p_device: device.id })
+    setBusy(false)
+    if (error) return toast(errMsg(error), 'err')
+    toast('Consola vinculada. En unos segundos aparecerá en línea.'); onClose()
   }
   return (
-    <Modal title="Conectar la 3DS (sin PC)" onClose={onClose} wide>
+    <Modal title="Conectar la 3DS (sin PC ni contraseñas)" onClose={onClose} wide>
       <div className="stack">
         <p className="muted">
-          <strong>Forja3DS</strong> es una app homebrew que se conecta <em>desde la consola</em> a internet (WiFi) y habla con Forja.
-          No necesitas ordenador ni estar en la misma red que la tablet.
+          <strong>Forja3DS</strong> se conecta a internet por WiFi y se empareja con un <strong>código</strong>, como las apps de TV.
+          No hace falta ordenador, ni estar en la misma red, ni escribir contraseñas en la consola.
         </p>
         <ol className="steps">
-          <li>Descarga <a className="btn sm" href="/downloads/Forja3DS.cia" download><Download size={14} /> Forja3DS.cia</a> e instálala con <strong>FBI</strong> (queda en el menú HOME), o bien <a className="btn sm" href="/downloads/Forja3DS.3dsx" download><Download size={14} /> Forja3DS.3dsx</a> y cópiala a <code>/3ds/</code> en la SD para abrirla desde el Homebrew Launcher.</li>
-          <li>Descarga este <code>config.txt</code>, <strong>escribe la contraseña</strong> y cópialo a la SD en <code>/3ds/forja/config.txt</code>. <button className="btn sm" onClick={download}><Download size={14} /> config.txt</button></li>
-          <li>En la 3DS abre <strong>Forja3DS</strong> desde el Homebrew Launcher. Cuando aparezca «Conectado», el punto de aquí se pone verde.</li>
+          <li>Descarga <a className="btn sm" href="/downloads/Forja3DS.cia" download><Download size={14} /> Forja3DS.cia</a> e instálala con <strong>FBI</strong> (queda en el menú HOME), o bien <a className="btn sm" href="/downloads/Forja3DS.3dsx" download><Download size={14} /> Forja3DS.3dsx</a> y cópiala a <code>/3ds/</code> en la SD.</li>
+          <li>Ábrela en la 3DS (con WiFi): te mostrará un <strong>código de 6 caracteres</strong>.</li>
+          <li>Escríbelo aquí abajo (o al crear el dispositivo). La consola queda vinculada solo a <em>este</em> dispositivo.</li>
         </ol>
-        <p className="muted small">La cuenta debe ser miembro del estudio. Lo ideal es crear una cuenta solo para la consola (Equipo → Añadir) y usar esa en <code>config.txt</code>, para no dejar tu contraseña personal en la SD.</p>
+        <form className="inline-form wrap" onSubmit={pair}>
+          <input value={code} onChange={e => setCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))} maxLength={6} placeholder="K7M2QX"
+            style={{ letterSpacing: '.3em', fontWeight: 700, maxWidth: 190 }} autoComplete="off" />
+          <button className="btn primary" disabled={busy || code.length < 6}>Vincular esta consola</button>
+        </form>
+        <p className="muted small">
+          Requisito (una sola vez): en Supabase → <strong>Authentication → Sign In / Providers → Allow anonymous sign-ins</strong> activado. La consola entra con una cuenta anónima que solo puede ver este dispositivo, no tus proyectos ni el resto del estudio.
+        </p>
         <p className="muted small">ID del dispositivo: <code>{device.id}</code></p>
       </div>
     </Modal>

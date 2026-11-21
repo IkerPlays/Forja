@@ -8,13 +8,14 @@ Un navegador no puede abrir FTP ni UDP, ni llamar a una IP de tu WiFi (HTTPS lo 
 | **Pantalla en directo** | Compartir ventana/capturadora desde un navegador | Compartir pantalla desde el navegador del PC |
 | **Mando / ratón y teclado** | Solo con el bridge opcional (ver abajo) | Solo con el bridge opcional |
 
-## 3DS → Forja3DS
+## 3DS → Forja3DS (con código, como las apps de TV)
 
-1. En Forja: **3DS → Añadir**. En el dispositivo pulsa *¿Cómo conecto la 3DS?*.
-2. Descarga `Forja3DS.cia` (instálala con FBI) o `Forja3DS.3dsx` (cópiala a `/3ds/` en la SD).
-3. Descarga el `config.txt` que genera la web, **escribe la contraseña** y cópialo a `/3ds/forja/config.txt`.
-   * La cuenta debe ser miembro del estudio. Lo recomendable es crear una **cuenta solo para la consola** (Equipo → Añadir; regístrala en la web con ese correo) para no dejar tu contraseña personal en la SD.
-4. Abre **Forja3DS** (menú HOME si instalaste el .cia, o Homebrew Launcher). Cuando ponga *Conectado*, el punto del dispositivo se pone verde y ya puedes explorar, subir, bajar, renombrar y borrar archivos de la SD.
+1. **Una vez, en Supabase:** Authentication → Sign In / Providers → activa **Allow anonymous sign-ins**.
+2. En Forja: **3DS → Añadir** (o en un dispositivo: *Instalar / vincular la 3DS*). Descarga `Forja3DS.cia` (instálala con FBI) o `Forja3DS.3dsx` (cópiala a `/3ds/` en la SD).
+3. Abre **Forja3DS** en la consola con WiFi: te muestra un **código de 6 caracteres**.
+4. Escríbelo en la web. La consola queda vinculada y el punto del dispositivo se pone verde: ya puedes explorar, subir, bajar, renombrar y borrar archivos de la SD.
+
+No hay contraseñas ni `config.txt`: la app lee la URL y la clave públicas de la web y entra con una cuenta anónima que **solo puede acceder a ese dispositivo** (no ve tus proyectos, juegos ni el resto del estudio). Si quieres desvincularla o pierdes la sesión, vuelve a vincularla con un código nuevo.
 
 Detalles: [`agent3ds/README.md`](../agent3ds/README.md). Se compila solo en GitHub Actions (*Build Forja3DS*) y se publica en Releases (`forja3ds-latest`).
 
@@ -49,6 +50,6 @@ Si no lo ejecutas, el mando aparece atenuado con un aviso. (Si usas Forja3DS par
 
 ## Seguridad
 
-* Cada agente usa una cuenta del estudio y las mismas reglas RLS: solo atiende dispositivos de ese estudio.
+* La 3DS usa una cuenta anónima enlazada a su dispositivo (tabla `device_links`): las políticas RLS solo le dejan sus órdenes y los archivos en tránsito de ese dispositivo. El código de emparejado caduca a los 30 min y solo vale una vez.
 * El PC solo expone la carpeta que eliges; el navegador valida cada ruta (sin `..`).
 * Las órdenes y los canales en tiempo real están limitados a miembros del estudio (`02_app.sql`).

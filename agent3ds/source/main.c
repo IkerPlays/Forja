@@ -8,7 +8,10 @@
  *   · mueve archivos por trozos de 1 MB a través de Supabase Storage (bucket "transfers").
  * Así la web puede ver y gestionar la tarjeta SD sin PC ni "bridge", desde cualquier red.
  *
- * Configuración: sdmc:/3ds/forja/config.txt  (url, anon, email, password, device)
+ * Sin configuración: lee la URL/clave públicas de la web (/forja-config.json), entra con una cuenta
+ * anónima y se empareja con un CÓDIGO que se introduce en la web (como las apps de TV).
+ * Opcional: sdmc:/3ds/forja/config.txt (site=, url=, anon=; o email/password/device para el modo clásico).
+ * La sesión se guarda en sdmc:/3ds/forja/session.txt.
  */
 #include <3ds.h>
 #include <stdarg.h>
@@ -23,12 +26,19 @@
 
 #define VERSION "0.1.0"
 #define CONFIG_PATH "sdmc:/3ds/forja/config.txt"
+#define SESSION_PATH "sdmc:/3ds/forja/session.txt"
+#ifndef DEFAULT_SITE
+#define DEFAULT_SITE "https://forja-hub.netlify.app"
+#endif
 #define PART_SIZE (1024 * 1024)
 #define MAX_FILE (50u * 1024u * 1024u)
 #define MAX_ENTRIES 2000
 
 static char g_url[256], g_anon[512], g_email[160], g_pass[160], g_device[64];
+static char g_site[200], g_refresh[1024], g_code[16];
 static char g_token[4096];
+static u32 g_last_status;
+static char g_last_err[120];
 static time_t g_token_at = 0;
 static char g_status[160] = "Iniciando…";
 
@@ -43,9 +53,15 @@ static void ui_redraw(const char *last) {
   printf("\x1b[33m Forja3DS " VERSION "\x1b[0m\n");
   printf(" ------------------------------------\n");
   printf(" Estado: %s\n\n", g_status);
-  printf(" Servidor: %.38s\n", g_url);
-  printf(" Dispositivo: %.8s...\n\n", g_device);
-  printf(" Ultima orden:\n  %.40s\n", last && *last ? last : "-");
+  if (g_code[0] && !g_device[0]) {
+    printf("\x1b[36m  CODIGO DE VINCULACION\x1b[0m\n\n");
+    printf("\x1b[1;33m      %s\x1b[0m\n\n", g_code);
+    printf(" En Forja (web): 3DS > Anadir\n y escribe este codigo.\n");
+  } else {
+    printf(" Servidor: %.38s\n", g_url[0] ? g_url : g_site);
+    printf(" Dispositivo: %.8s...\n\n", g_device[0] ? g_device : "(sin vincular)");
+    printf(" Ultima orden:\n  %.40s\n", last && *last ? last : "-");
+  }
   printf("\n\n START = salir\n");
   gfxFlushBuffers();
 }
@@ -220,31 +236,82 @@ static Result http_do(HTTPC_RequestMethod method, const char *url, const char *c
 }
 
 /* ---- sesión ---- */
-static int login(void) {
+static void save_session(void) {
+  mkdir("sdmc:/3ds", 0777);
+  mkdir("sdmc:/3ds/forja", 0777);
+  FILE *f = fopen(SESSION_PATH, "w");
+  if (!f) return;
+  fprintf(f, "refresh=%s\ndevice=%s\n", g_refresh, g_device);
+  fclose(f);
+}
+
+static void trim(char *s);
+
+static void load_session(void) {
+  FILE *f = fopen(SESSION_PATH, "r");
+  if (!f) return;
+  char line[1400];
+  while (fgets(line, sizeof line, f)) {
+    trim(line);
+    if (!strncmp(line, "refresh=", 8)) snprintf(g_refresh, sizeof g_refresh, "%s", line + 8);
+    else if (!strncmp(line, "device=", 7)) snprintf(g_device, sizeof g_device, "%s", line + 7);
+  }
+  fclose(f);
+}
+
+/* POST a /auth/v1/...; si va bien guarda los tokens y devuelve 1 */
+static int auth_call(const char *path, const char *body) {
   char url[400];
-  snprintf(url, sizeof url, "%s/auth/v1/token?grant_type=password", g_url);
-  Buf body = {0};
-  buf_str(&body, "{\"email\":"); buf_json_str(&body, g_email);
-  buf_str(&body, ",\"password\":"); buf_json_str(&body, g_pass);
-  buf_str(&body, "}");
+  snprintf(url, sizeof url, "%s%s", g_url, path);
   const char *hdrs[] = {"apikey", g_anon, "Content-Type", "application/json", NULL};
   Resp r;
-  Result rc = http_do(HTTPC_METHOD_POST, url, hdrs, body.p, (u32)body.len, &r);
-  free(body.p);
+  Result rc = http_do(HTTPC_METHOD_POST, url, hdrs, body, (u32)strlen(body), &r);
+  g_last_status = 0;
   if (R_FAILED(rc)) { set_status("Sin conexion (%08lX)", (unsigned long)rc); return 0; }
+  g_last_status = r.status;
   if (r.status != 200) {
     char msg[100] = "";
-    json_get_str((char *)r.data, "error_description", msg, sizeof msg);
-    if (!msg[0]) json_get_str((char *)r.data, "msg", msg, sizeof msg);
-    set_status("Login %lu: %.60s", (unsigned long)r.status, msg);
+    json_get_str((char *)r.data, "msg", msg, sizeof msg);
+    if (!msg[0]) json_get_str((char *)r.data, "error_description", msg, sizeof msg);
+    if (strstr(msg, "nonymous")) set_status("Activa 'Allow anonymous sign-ins' en Supabase");
+    else set_status("Login %lu: %.60s", (unsigned long)r.status, msg);
     resp_free(&r);
     return 0;
   }
+  char refresh[sizeof g_refresh];
   int ok = json_get_str((char *)r.data, "access_token", g_token, sizeof g_token);
+  if (ok && json_get_str((char *)r.data, "refresh_token", refresh, sizeof refresh)) {
+    snprintf(g_refresh, sizeof g_refresh, "%s", refresh);
+    save_session();                      /* el refresh token rota en cada uso: guardarlo siempre */
+  }
   resp_free(&r);
   if (!ok) { set_status("Respuesta de login no valida"); return 0; }
   g_token_at = time(NULL);
   return 1;
+}
+
+static int login(void) {
+  if (g_email[0] && g_pass[0]) {          /* modo clásico (config.txt con email y contraseña) */
+    Buf b = {0};
+    buf_str(&b, "{\"email\":"); buf_json_str(&b, g_email);
+    buf_str(&b, ",\"password\":"); buf_json_str(&b, g_pass);
+    buf_str(&b, "}");
+    int ok = auth_call("/auth/v1/token?grant_type=password", b.p ? b.p : "{}");
+    free(b.p);
+    return ok;
+  }
+  if (g_refresh[0]) {
+    Buf b = {0};
+    buf_str(&b, "{\"refresh_token\":"); buf_json_str(&b, g_refresh);
+    buf_str(&b, "}");
+    int ok = auth_call("/auth/v1/token?grant_type=refresh_token", b.p ? b.p : "{}");
+    free(b.p);
+    if (ok) return 1;
+    if (g_last_status >= 400 && g_last_status < 500) {   /* sesión inválida: empezar de cero */
+      g_refresh[0] = 0; g_device[0] = 0; remove(SESSION_PATH);
+    } else return 0;                                       /* sin red: reintentar luego */
+  }
+  return auth_call("/auth/v1/signup", "{}");               /* cuenta anónima nueva */
 }
 
 /* Petición autenticada; reintenta una vez si el token caducó */
@@ -268,8 +335,14 @@ static int rpc(const char *fn, const char *json_body, Resp *out) {
   char path[128];
   snprintf(path, sizeof path, "/rest/v1/rpc/%s", fn);
   Result rc = api(HTTPC_METHOD_POST, path, "application/json", json_body, (u32)strlen(json_body), out);
+  g_last_err[0] = 0; g_last_status = 0;
   if (R_FAILED(rc)) return 0;
-  if (out->status >= 300) { resp_free(out); return 0; }
+  g_last_status = out->status;
+  if (out->status >= 300) {
+    json_get_str((char *)out->data, "message", g_last_err, sizeof g_last_err);
+    resp_free(out);
+    return 0;
+  }
   return 1;
 }
 
@@ -446,9 +519,10 @@ static void trim(char *s) {
   while (n && (s[n - 1] == '\n' || s[n - 1] == '\r' || s[n - 1] == ' ' || s[n - 1] == '\t')) s[--n] = 0;
 }
 
-static int load_config(void) {
+/* config.txt es OPCIONAL: site=, url=, anon= (y email/password/device para el modo clásico) */
+static void load_config(void) {
   FILE *f = fopen(CONFIG_PATH, "r");
-  if (!f) { set_status("Falta %s", CONFIG_PATH); return 0; }
+  if (!f) return;
   char line[1024];
   while (fgets(line, sizeof line, f)) {
     trim(line);
@@ -457,7 +531,8 @@ static int load_config(void) {
     if (!eq) continue;
     *eq = 0;
     char *k = line, *v = eq + 1;
-    if (!strcmp(k, "url")) snprintf(g_url, sizeof g_url, "%s", v);
+    if (!strcmp(k, "site")) snprintf(g_site, sizeof g_site, "%s", v);
+    else if (!strcmp(k, "url")) snprintf(g_url, sizeof g_url, "%s", v);
     else if (!strcmp(k, "anon")) snprintf(g_anon, sizeof g_anon, "%s", v);
     else if (!strcmp(k, "email")) snprintf(g_email, sizeof g_email, "%s", v);
     else if (!strcmp(k, "password")) snprintf(g_pass, sizeof g_pass, "%s", v);
@@ -466,11 +541,22 @@ static int load_config(void) {
   fclose(f);
   size_t n = strlen(g_url);
   while (n && g_url[n - 1] == '/') g_url[--n] = 0;
-  if (!g_url[0] || !g_anon[0] || !g_email[0] || !g_pass[0] || !g_device[0]) {
-    set_status("config.txt incompleto (¿falta la password?)");
-    return 0;
-  }
-  return 1;
+  n = strlen(g_site);
+  while (n && g_site[n - 1] == '/') g_site[--n] = 0;
+}
+
+/* Lee la URL y la clave públicas de Supabase de la propia web de Forja */
+static int fetch_site_config(void) {
+  char url[300];
+  snprintf(url, sizeof url, "%s/forja-config.json", g_site);
+  Resp r;
+  Result rc = http_do(HTTPC_METHOD_GET, url, NULL, NULL, 0, &r);
+  if (R_FAILED(rc)) { set_status("Sin conexion (%08lX)", (unsigned long)rc); return 0; }
+  int ok = r.status == 200 && json_get_str((char *)r.data, "url", g_url, sizeof g_url) &&
+           json_get_str((char *)r.data, "anon", g_anon, sizeof g_anon);
+  if (!ok) set_status("No pude leer la config de la web (HTTP %lu)", (unsigned long)r.status);
+  resp_free(&r);
+  return ok;
 }
 
 /* ------------------------------------------------------------------ */
@@ -485,39 +571,75 @@ static void heartbeat(void) {
   free(b.p);
 }
 
+/* Pide (o recupera) el código de vinculación; devuelve 1 si el servidor respondió */
+static int pair_poll(void) {
+  Resp r;
+  if (!rpc("device_pair_poll", "{}", &r)) return 0;
+  char dev[64] = "";
+  json_get_str((char *)r.data, "device_id", dev, sizeof dev);
+  if (dev[0]) {
+    snprintf(g_device, sizeof g_device, "%s", dev);
+    g_code[0] = 0;
+    save_session();
+  } else {
+    json_get_str((char *)r.data, "code", g_code, sizeof g_code);
+  }
+  resp_free(&r);
+  return 1;
+}
+
 int main(void) {
   gfxInitDefault();
   consoleInit(GFX_TOP, &g_top);
   consoleInit(GFX_BOTTOM, &g_bottom);
   consoleSelect(&g_bottom);
-  printf("\n Forja3DS " VERSION "\n Conecta tu 3DS con Forja.\n\n Deja la app abierta y con WiFi.\n Cierra la tapa con cuidado:\n la consola se suspende.\n");
-  if (osGetWifiStrength() == 0) printf("\n (sin WiFi detectado)\n");
+  printf("\n Forja3DS " VERSION "\n Conecta tu 3DS con Forja.\n\n Deja la app abierta y con WiFi.\n Si cierras la tapa, la consola\n se suspende.\n");
   osSetSpeedupEnable(true);
   aptSetSleepAllowed(false);
 
-  char last[160] = "";
-  int ready = 0;
-  if (R_SUCCEEDED(httpcInit(0)) && load_config()) {
-    set_status("Iniciando sesion…");
-    ui_redraw(last);
-    ready = login();
-  }
-  if (ready) { set_status("Conectado"); heartbeat(); }
+  snprintf(g_site, sizeof g_site, "%s", DEFAULT_SITE);
+  load_session();
+  load_config();
+  Result hrc = httpcInit(0);
+  if (R_FAILED(hrc)) set_status("httpc no disponible (%08lX)", (unsigned long)hrc);
 
-  time_t last_beat = time(NULL), last_retry = time(NULL), last_poll = 0;
-  int need_redraw = 1;
+  char last[160] = "";
+  int cfg_ok = g_url[0] && g_anon[0], authed = 0, need_redraw = 1;
+  time_t last_beat = 0, last_try = 0, last_poll = 0;
+  if (R_SUCCEEDED(hrc)) set_status("Iniciando…");
+
   while (aptMainLoop()) {
     hidScanInput();
     if (hidKeysDown() & KEY_START) break;
     time_t now = time(NULL);
 
-    if (!ready) {
-      /* Sin sesión: reintenta cada 20 s (WiFi caído, contraseña corregida en la SD…) */
-      if (now - last_retry >= 20 && g_device[0]) {
-        last_retry = now;
-        set_status("Reconectando…"); ui_redraw(last);
-        ready = login();
-        if (ready) { set_status("Conectado"); heartbeat(); }
+    if (R_FAILED(hrc)) {
+      /* sin servicio HTTP no hay nada que hacer */
+    } else if (!cfg_ok) {
+      if (now - last_try >= 15) {
+        last_try = now;
+        set_status("Leyendo configuracion…"); ui_redraw(last);
+        cfg_ok = fetch_site_config();
+        need_redraw = 1;
+      }
+    } else if (!authed) {
+      if (now - last_try >= 15) {
+        last_try = now;
+        set_status("Iniciando sesion…"); ui_redraw(last);
+        authed = login();
+        if (authed && g_device[0]) { set_status("Conectado"); heartbeat(); last_beat = now; }
+        else if (authed) set_status("Pidiendo codigo…");
+        need_redraw = 1;
+      }
+    } else if (!g_device[0]) {
+      /* Emparejado: muestra el código y espera a que lo apruebes en la web */
+      if (now - last_poll >= 3) {
+        last_poll = now;
+        if (pair_poll()) {
+          if (g_device[0]) { set_status("Vinculada. Conectando…"); heartbeat(); last_beat = now; }
+          else set_status("Esperando el codigo en la web");
+        } else if (g_last_status == 401) { authed = 0; last_try = 0; }
+        else set_status("Sin respuesta, reintentando…");
         need_redraw = 1;
       }
     } else {
@@ -532,6 +654,11 @@ int main(void) {
           while (*j == ' ' || *j == '\n') j++;
           if (*j == '{') { ui_redraw(last); handle(j, last, sizeof last); need_redraw = 1; last_poll = 0; }
           resp_free(&r);
+        } else if (strstr(g_last_err, "sin permiso")) {
+          /* Desvinculada desde la web: vuelve a pedir un código */
+          g_device[0] = 0; save_session();
+          set_status("Desvinculada. Pidiendo codigo…");
+          need_redraw = 1;
         } else {
           set_status("Sin respuesta, reintentando…");
           last_poll = time(NULL) + 8;   /* espera ~10 s antes de volver a intentarlo */
