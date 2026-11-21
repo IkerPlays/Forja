@@ -31,7 +31,8 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "roots.h"
+#include <curl/curl.h>
+#include "cacert.h"
 
 #ifndef VERSION
 #define VERSION "dev"
@@ -51,14 +52,18 @@
 #define PART_SIZE (256 * 1024)   /* trozo al subir al servidor (la web acepta cualquier tamaño) */
 #define MAX_FILE (50u * 1024u * 1024u)
 #define MAX_ENTRIES 2000
-#define NO_NETWORK 0xD8A0A046u
+#define NO_NETWORK ((u32)-1000)   /* sin WiFi */
 
 static char g_url[256], g_anon[512], g_email[160], g_pass[160], g_device[64];
 static char g_site[200], g_refresh[1024];
 static char g_token[4096];
 static time_t g_token_at = 0;
 static u32 g_last_status;
-static Result g_cfg_rc, g_net_rc;
+static Result g_cfg_rc, g_net_rc;      /* negativo = fallo de red (-código de curl) */
+static char g_self[200];               /* ruta del .3dsx si se abrió desde el Homebrew Launcher */
+static char g_notice[100];
+static int g_ip_open;                  /* teclado numérico propio para la IP (solo hilo principal) */
+static char g_ip_buf[32];
 static char g_relay_saved[100], g_manual_ip[48];
 static int g_manual_new;          /* último fallo de red al leer la configuración */
 static int g_relay;             /* 1 = hablando con la app de escritorio por HTTP en la WiFi local */
@@ -94,9 +99,18 @@ static void set_error(const char *fmt, ...) {
   va_list ap; va_start(ap, fmt); vsnprintf(tmp, sizeof tmp, fmt, ap); va_end(ap);
   set_state(ST_ERROR, tmp);
 }
+static void set_notice(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+static void set_notice(const char *fmt, ...) {
+  char tmp[100];
+  va_list ap; va_start(ap, fmt); vsnprintf(tmp, sizeof tmp, fmt, ap); va_end(ap);
+  LightLock_Lock(&g_lock);
+  snprintf(g_notice, sizeof g_notice, "%s", tmp);
+  LightLock_Unlock(&g_lock);
+}
 static const char *rc_text(Result rc, char *buf, size_t cap) {
-  if ((u32)rc == 0xD8A0A046u) snprintf(buf, cap, "Sin conexión a internet. Comprueba el WiFi de la consola.");
-  else snprintf(buf, cap, "No se pudo conectar (código %08lX)", (unsigned long)rc);
+  if ((u32)rc == NO_NETWORK) snprintf(buf, cap, "Sin conexión WiFi. Comprueba la red de la consola.");
+  else if (rc < 0) snprintf(buf, cap, "No se pudo conectar: %s (código %d)", curl_easy_strerror((CURLcode)(-rc)), (int)-rc);
+  else snprintf(buf, cap, "Error de red (%d)", (int)rc);
   return buf;
 }
 static const char *friendly(const char *type) {
@@ -247,71 +261,115 @@ static long long json_get_num(const char *j, const char *key, long long dflt) {
 }
 
 /* ------------------------------------------------------------------ */
-/* HTTP (httpc)                                                        */
+/* HTTP/TLS con libcurl + mbedTLS                                      */
+/* El SSL del sistema de la 3DS solo llega a TLS 1.1 (3dbrew), y Netlify/Supabase exigen TLS 1.2+:  */
+/* por eso httpc nunca podía conectar. Aquí el TLS va dentro de la app.                              */
 /* ------------------------------------------------------------------ */
-typedef struct { u8 *data; size_t len; u32 status; } Resp;
+typedef struct { u8 *data; size_t len, cap; u32 status; } Resp;
+typedef int HttpMethod;
+#define M_GET 0
+#define M_POST 1
 
-static void resp_free(Resp *r) { free(r->data); r->data = NULL; r->len = 0; }
+static void resp_free(Resp *r) { free(r->data); r->data = NULL; r->len = r->cap = 0; }
 
-/* Modo TLS: 0 = sin verificar el certificado (lo habitual en homebrew); 1 = confiar en CAs raíz incluidas.
- * Si un modo falla se prueba el otro y se recuerda el que funcione. */
-static int g_tls_mode = 0;
+static CURL *g_curl;
+static int g_tls_mode = 0;   /* 0 = verificado con las CAs incluidas; 1 = sin verificar (reloj mal, CA nueva…) */
 
-/* hdrs: pares nombre,valor terminados en NULL */
-static Result http_once(HTTPC_RequestMethod method, const char *url, const char *const *hdrs,
-                        const void *body, u32 body_len, Resp *out, int mode) {
-  memset(out, 0, sizeof *out);
-  httpcContext ctx;
-  Result rc = httpcOpenContext(&ctx, method, url, 1);
-  if (R_FAILED(rc)) return rc;
-  if (mode == 0) {
-    httpcSetSSLOpt(&ctx, SSLCOPT_DisableVerify);
-  } else {
-    for (unsigned i = 0; i < sizeof g_roots / sizeof g_roots[0]; i++)
-      httpcAddTrustedRootCA(&ctx, g_roots[i].der, g_roots[i].size);
-  }
-  httpcSetKeepAlive(&ctx, HTTPC_KEEPALIVE_ENABLED);
-  httpcAddRequestHeaderField(&ctx, "User-Agent", "Forja3DS/" VERSION);
-  for (int i = 0; hdrs && hdrs[i]; i += 2) httpcAddRequestHeaderField(&ctx, hdrs[i], hdrs[i + 1]);
-  if (body && body_len) {
-    rc = httpcAddPostDataRaw(&ctx, (const u32 *)body, body_len);
-    if (R_FAILED(rc)) { httpcCloseContext(&ctx); return rc; }
-  }
-  rc = httpcBeginRequest(&ctx);
-  if (R_FAILED(rc)) { httpcCloseContext(&ctx); return rc; }
-  rc = httpcGetResponseStatusCode(&ctx, &out->status);
-  if (R_FAILED(rc)) { httpcCloseContext(&ctx); return rc; }
-
-  const u32 step = 0x10000;
-  out->data = malloc(step + 1);
-  if (!out->data) { httpcCloseContext(&ctx); return -1; }
-  u32 got = 0;
-  do {
-    rc = httpcDownloadData(&ctx, out->data + out->len, step, &got);
-    out->len += got;
-    if (rc == (Result)HTTPC_RESULTCODE_DOWNLOADPENDING) {
-      u8 *np = realloc(out->data, out->len + step + 1);
-      if (!np) { httpcCloseContext(&ctx); resp_free(out); return -1; }
-      out->data = np;
-    }
-  } while (rc == (Result)HTTPC_RESULTCODE_DOWNLOADPENDING);
-  out->data[out->len] = 0;
-  httpcCloseContext(&ctx);
-  return R_FAILED(rc) ? rc : 0;
+static int soc_up(void) {
+  if (g_soc_buf) return 1;
+  g_soc_buf = memalign(0x1000, 0x100000);
+  if (!g_soc_buf) return 0;
+  if (R_FAILED(socInit(g_soc_buf, 0x100000))) { free(g_soc_buf); g_soc_buf = NULL; return 0; }
+  return 1;
 }
 
-static Result http_do(HTTPC_RequestMethod method, const char *url, const char *const *hdrs,
-                      const void *body, u32 body_len, Resp *out) {
-  int first = g_tls_mode;
-  Result rc = http_once(method, url, hdrs, body, body_len, out, first);
-  g_diag[first] = R_FAILED(rc) ? (u32)rc : 0;
-  if (R_FAILED(rc) && (u32)rc != NO_NETWORK) {
-    resp_free(out);
-    Result rc2 = http_once(method, url, hdrs, body, body_len, out, !first);
-    g_diag[!first] = R_FAILED(rc2) ? (u32)rc2 : 0;
-    if (R_SUCCEEDED(rc2)) { g_tls_mode = !first; return 0; }
-    resp_free(out);
+static int net_init(void) {
+  if (!soc_up()) return 0;
+  curl_global_init(CURL_GLOBAL_DEFAULT);
+  g_curl = curl_easy_init();
+  return g_curl != NULL;
+}
+
+static size_t on_write(char *p, size_t sz, size_t n, void *ud) {
+  Resp *r = ud;
+  size_t k = sz * n;
+  if (r->len + k + 1 > r->cap) {
+    size_t nc = r->cap ? r->cap : 4096;
+    while (nc < r->len + k + 1) nc *= 2;
+    u8 *np = realloc(r->data, nc);
+    if (!np) return 0;
+    r->data = np; r->cap = nc;
   }
+  memcpy(r->data + r->len, p, k);
+  r->len += k;
+  r->data[r->len] = 0;
+  return k;
+}
+
+static int is_tls_error(int cc) {
+  return cc == 35 || cc == 51 || cc == 58 || cc == 59 || cc == 60 || cc == 64 || cc == 66 || cc == 77 || cc == 83;
+}
+
+/* hdrs: pares nombre,valor terminados en NULL. Devuelve 0 o -(código de curl). */
+static int http_once(HttpMethod method, const char *url, const char *const *hdrs,
+                     const void *body, u32 body_len, Resp *out, int mode) {
+  memset(out, 0, sizeof *out);
+  if (!g_curl) return -(int)CURLE_FAILED_INIT;
+  curl_easy_reset(g_curl);
+  curl_easy_setopt(g_curl, CURLOPT_URL, url);
+  curl_easy_setopt(g_curl, CURLOPT_WRITEFUNCTION, on_write);
+  curl_easy_setopt(g_curl, CURLOPT_WRITEDATA, out);
+  curl_easy_setopt(g_curl, CURLOPT_NOSIGNAL, 1L);
+  curl_easy_setopt(g_curl, CURLOPT_CONNECTTIMEOUT, 15L);
+  curl_easy_setopt(g_curl, CURLOPT_TIMEOUT, 150L);
+  curl_easy_setopt(g_curl, CURLOPT_USERAGENT, "Forja3DS/" VERSION);
+  if (mode == 0) {
+    struct curl_blob blob;
+    blob.data = (void *)g_ca_pem;
+    blob.len = sizeof g_ca_pem - 1;
+    blob.flags = CURL_BLOB_NOCOPY;
+    curl_easy_setopt(g_curl, CURLOPT_CAINFO_BLOB, &blob);
+  } else {
+    curl_easy_setopt(g_curl, CURLOPT_SSL_VERIFYPEER, 0L);
+    curl_easy_setopt(g_curl, CURLOPT_SSL_VERIFYHOST, 0L);
+  }
+  if (method == M_POST) {
+    curl_easy_setopt(g_curl, CURLOPT_POST, 1L);
+    curl_easy_setopt(g_curl, CURLOPT_POSTFIELDS, body ? (const char *)body : "");
+    curl_easy_setopt(g_curl, CURLOPT_POSTFIELDSIZE, (long)body_len);
+  }
+  struct curl_slist *h = NULL;
+  for (int i = 0; hdrs && hdrs[i]; i += 2) {
+    size_t need = strlen(hdrs[i]) + strlen(hdrs[i + 1]) + 4;
+    char *line = malloc(need);
+    if (!line) continue;
+    snprintf(line, need, "%s: %s", hdrs[i], hdrs[i + 1]);
+    h = curl_slist_append(h, line);
+    free(line);
+  }
+  h = curl_slist_append(h, "Expect:");   /* sin 100-continue */
+  curl_easy_setopt(g_curl, CURLOPT_HTTPHEADER, h);
+  CURLcode cc = curl_easy_perform(g_curl);
+  long code = 0;
+  curl_easy_getinfo(g_curl, CURLINFO_RESPONSE_CODE, &code);
+  out->status = (u32)code;
+  curl_slist_free_all(h);
+  if (cc != CURLE_OK) { resp_free(out); return -(int)cc; }
+  if (!out->data) out->data = calloc(1, 1);
+  return 0;
+}
+
+static int http_do(HttpMethod method, const char *url, const char *const *hdrs,
+                   const void *body, u32 body_len, Resp *out) {
+  int first = g_tls_mode;
+  int rc = http_once(method, url, hdrs, body, body_len, out, first);
+  g_diag[first] = rc ? (u32)(-rc) : 0;
+  if (rc && is_tls_error(-rc)) {
+    int rc2 = http_once(method, url, hdrs, body, body_len, out, !first);
+    g_diag[!first] = rc2 ? (u32)(-rc2) : 0;
+    if (!rc2) { g_tls_mode = !first; return 0; }
+  }
+  if (rc && osGetWifiStrength() == 0) return (int)NO_NETWORK;
   return rc;
 }
 
@@ -346,7 +404,7 @@ static int auth_call(const char *path, const char *body) {
   snprintf(url, sizeof url, "%s%s", g_url, path);
   const char *hdrs[] = {"apikey", g_anon, "Content-Type", "application/json", NULL};
   Resp r;
-  Result rc = http_do(HTTPC_METHOD_POST, url, hdrs, body, (u32)strlen(body), &r);
+  Result rc = http_do(M_POST, url, hdrs, body, (u32)strlen(body), &r);
   g_last_status = 0;
   g_net_rc = rc;
   if (R_FAILED(rc)) { char m[120]; set_error("%s", rc_text(rc, m, sizeof m)); return 0; }
@@ -397,7 +455,7 @@ static int login(void) {
 }
 
 /* Petición autenticada; reintenta una vez si el token caducó */
-static Result api(HTTPC_RequestMethod m, const char *path, const char *ctype, const void *body, u32 blen, Resp *out) {
+static Result api(HttpMethod m, const char *path, const char *ctype, const void *body, u32 blen, Resp *out) {
   char url[512], auth[sizeof g_token + 16];
   snprintf(url, sizeof url, "%s%s", g_url, path);
   for (int attempt = 0; attempt < 2; attempt++) {
@@ -416,7 +474,7 @@ static Result api(HTTPC_RequestMethod m, const char *path, const char *ctype, co
 static int rpc(const char *fn, const char *json_body, Resp *out) {
   char path[128];
   snprintf(path, sizeof path, "/rest/v1/rpc/%s", fn);
-  Result rc = api(HTTPC_METHOD_POST, path, "application/json", json_body, (u32)strlen(json_body), out);
+  Result rc = api(M_POST, path, "application/json", json_body, (u32)strlen(json_body), out);
   g_last_err[0] = 0; g_last_status = 0;
   if (R_FAILED(rc)) return 0;
   g_last_status = out->status;
@@ -488,7 +546,7 @@ static int cmd_get_file(const char *vpath, const char *studio, const char *cmd_i
     snprintf(path, sizeof path, "/storage/v1/object/transfers/%s/%s/%s.p%d", studio, g_device, cmd_id, i);
     set_progress(base_name(p), 1, i, parts);
     Resp r;
-    Result rc = api(HTTPC_METHOD_POST, path, "application/octet-stream", chunk, (u32)n, &r);
+    Result rc = api(M_POST, path, "application/octet-stream", chunk, (u32)n, &r);
     if (R_FAILED(rc) || r.status >= 300) { snprintf(err, errcap, "Fallo al subir (HTTP %lu)", R_FAILED(rc) ? 0UL : (unsigned long)r.status); ok = 0; }
     if (!R_FAILED(rc)) resp_free(&r);
   }
@@ -510,7 +568,7 @@ static int cmd_put_file(const char *vpath, const char *prefix, int parts, char *
     snprintf(path, sizeof path, "/storage/v1/object/authenticated/transfers/%s.p%d", prefix, i);
     set_progress(base_name(p), 0, i, parts);
     Resp r;
-    Result rc = api(HTTPC_METHOD_GET, path, NULL, NULL, 0, &r);
+    Result rc = api(M_GET, path, NULL, NULL, 0, &r);
     if (R_FAILED(rc) || r.status != 200) { snprintf(err, errcap, "Fallo al descargar (HTTP %lu)", R_FAILED(rc) ? 0UL : (unsigned long)r.status); ok = 0; }
     if (!R_FAILED(rc)) {
       if (ok && fwrite(r.data, 1, r.len, f) != r.len) { snprintf(err, errcap, "Error al escribir en la SD (llena?)"); ok = 0; }
@@ -634,7 +692,7 @@ static int fetch_site_config(void) {
   char url[300];
   snprintf(url, sizeof url, "%s/forja-config.json", g_site);
   Resp r;
-  Result rc = http_do(HTTPC_METHOD_GET, url, NULL, NULL, 0, &r);
+  Result rc = http_do(M_GET, url, NULL, NULL, 0, &r);
   g_cfg_rc = rc;
   if (R_FAILED(rc)) { char m[120]; set_error("%s", rc_text(rc, m, sizeof m)); return 0; }
   int ok = r.status == 200 && json_get_str((char *)r.data, "url", g_url, sizeof g_url) &&
@@ -730,6 +788,7 @@ static void draw_top(unsigned tick, State st, const char *status, const char *co
   text_at("para Nintendo 3DS", 55, 34, 0.42f, C_MUTED, 0);
   text_at("v" VERSION, 386, 16, 0.45f, C_MUTED, C2D_AlignRight);
 
+  if (g_notice[0]) text_at(g_notice, 200, 38, 0.42f, C_AMBER, C2D_AlignCenter);
   card(16, 58, 368, 134, 10);
   switch (st) {
     case ST_PAIR: {
@@ -768,7 +827,7 @@ static void draw_top(unsigned tick, State st, const char *status, const char *co
       C2D_DrawCircleSolid(200, 90, 0, 16, C_ERR);
       text_at("!", 200, 74, 0.8f, CLR(255, 255, 255), C2D_AlignCenter);
       text_wrap(status, 40, 114, 0.5f, C_TEXT, 320);
-      text_at("Reintentando…    A: escribir la IP del PC (app de escritorio)", 200, 170, 0.42f, C_MUTED, C2D_AlignCenter);
+      text_at("Reintentando automáticamente…", 200, 170, 0.42f, C_MUTED, C2D_AlignCenter);
       break;
     default:
       spinner(200, 100, 20, tick, 0xff, 0x7a, 0x2f);
@@ -777,6 +836,64 @@ static void draw_top(unsigned tick, State st, const char *status, const char *co
   }
   rrect(136, 202, 128, 24, 12, C_PANEL2);
   text_at("START  ·  Salir", 200, 207, 0.45f, C_MUTED, C2D_AlignCenter);
+}
+
+/* Teclado numérico propio para la IP del PC (sin el teclado del sistema, que es lo que fallaba) */
+static const char *KP_ROWS[3] = {"123<", "456.", "789:"};
+
+static void ip_open(void) {
+  u32 me = (u32)gethostid();   /* IP de la consola (orden de red): prerrellena la red para escribir solo el final */
+  if (me) snprintf(g_ip_buf, sizeof g_ip_buf, "%u.%u.%u.", (unsigned)(me & 0xFF), (unsigned)((me >> 8) & 0xFF), (unsigned)((me >> 16) & 0xFF));
+  else g_ip_buf[0] = 0;
+  g_ip_open = 1;
+}
+
+static void ip_tap(int px, int py) {
+  for (int r = 0; r < 4; r++) {
+    for (int c = 0; c < 4; c++) {
+      if (r == 3 && c == 3) continue;
+      int x = 8 + c * 78, y = 70 + r * 42, w = (r == 3 && c == 2) ? 148 : 70, h = 36;
+      if (px < x || px >= x + w || py < y || py >= y + h) continue;
+      size_t n = strlen(g_ip_buf);
+      if (r < 3) {
+        char k = KP_ROWS[r][c];
+        if (k == '<') { if (n) g_ip_buf[n - 1] = 0; }
+        else if (n < 21) { g_ip_buf[n] = k; g_ip_buf[n + 1] = 0; }
+      } else if (c == 1) {
+        if (n < 21) { g_ip_buf[n] = '0'; g_ip_buf[n + 1] = 0; }
+      } else if (c == 0) {
+        g_ip_open = 0;
+      } else if (c == 2) {
+        if (n >= 7 && strchr(g_ip_buf, '.')) {
+          LightLock_Lock(&g_lock); snprintf(g_manual_ip, sizeof g_manual_ip, "%s", g_ip_buf); g_manual_new = 1; LightLock_Unlock(&g_lock);
+          g_ip_open = 0;
+        }
+      }
+      return;
+    }
+  }
+}
+
+static void draw_keypad(unsigned tick) {
+  C2D_DrawRectangle(0, 0, 0, 320, 240, C_PANEL, C_PANEL, C_BG1, C_BG1);
+  rrect(8, 12, 304, 46, 8, C_PANEL2);
+  char shown[40];
+  snprintf(shown, sizeof shown, "%s%s", g_ip_buf, (tick / 30) % 2 ? "|" : "");
+  text_at(shown[0] ? shown : "192.168.1.20", 20, 18, 0.95f, g_ip_buf[0] ? C_TEXT : C_LINE, 0);
+  for (int r = 0; r < 4; r++) {
+    for (int c = 0; c < 4; c++) {
+      if (r == 3 && c == 3) continue;
+      float x = 8 + c * 78, y = 70 + r * 42, w = (r == 3 && c == 2) ? 148 : 70;
+      char lab[16];
+      u32 bg = C_PANEL2, fg = C_TEXT;
+      if (r < 3) snprintf(lab, sizeof lab, "%c", KP_ROWS[r][c]);
+      else if (c == 1) snprintf(lab, sizeof lab, "0");
+      else if (c == 0) { snprintf(lab, sizeof lab, "Cancelar"); fg = C_MUTED; }
+      else { snprintf(lab, sizeof lab, "Conectar"); bg = C_ORANGE; fg = CLR(0x1a, 0x0d, 0x03); }
+      rrect(x, y, w, 36, 7, bg);
+      text_at(lab, x + w / 2, y + 6, r == 3 && c != 1 ? 0.55f : 0.8f, fg, C2D_AlignCenter);
+    }
+  }
 }
 
 static void draw_bottom(State st, int nacts, const Act *acts, int pl, int pcur, int ptotal, const char *plabel, const u32 *diag) {
@@ -808,18 +925,22 @@ static void draw_bottom(State st, int nacts, const Act *acts, int pl, int pcur, 
     y += 24;
   }
 
+  if (st == ST_ERROR) {
+    rrect(12, 188, 296, 36, 8, C_ORANGE);
+    text_at("Escribir la IP del PC (app de escritorio)", 160, 197, 0.5f, CLR(0x1a, 0x0d, 0x03), C2D_AlignCenter);
+  }
   if (pl) {
     float f = ptotal ? (float)(pcur + 1) / (float)ptotal : 0;
     text_at(plabel, 16, 214, 0.38f, C_MUTED, 0);
     rrect(16, 228, 288, 6, 3, C_PANEL2);
     rrect(16, 228, 288.0f * f > 6 ? 288.0f * f : 6, 6, 3, C_ORANGE);
-  } else if (diag[0] != 0xFFFFFFFFu && (diag[0] || diag[1] != 0xFFFFFFFFu) && st != ST_RUN) {
-    char d[96];
-    snprintf(d, sizeof d, "TLS A:%08lX  B:%s", (unsigned long)diag[0], diag[1] == 0xFFFFFFFFu ? "--" : "");
-    if (diag[1] != 0xFFFFFFFFu) snprintf(d, sizeof d, "TLS  A:%08lX   B:%08lX", (unsigned long)diag[0], (unsigned long)diag[1]);
+  } else if (st != ST_RUN && (diag[0] != 0xFFFFFFFFu || diag[1] != 0xFFFFFFFFu) && (diag[0] || diag[1])) {
+    char d[110], a1[16], b1[16];
+    #define DG(v, o) (v == 0xFFFFFFFFu ? snprintf(o, sizeof o, "--") : v ? snprintf(o, sizeof o, "err %lu", (unsigned long)v) : snprintf(o, sizeof o, "ok"))
+    DG(diag[0], a1); DG(diag[1], b1);
+    snprintf(d, sizeof d, "TLS verificado: %s   sin verificar: %s", a1, b1);
     text_at(d, 160, 216, 0.4f, C_MUTED, C2D_AlignCenter);
   }
-}
 
 /* ------------------------------------------------------------------ */
 /* Hilo de red                                                         */
@@ -850,14 +971,6 @@ static int pair_poll(void) {
 }
 
 /* Plan B sin TLS: busca la app de escritorio de Forja en la WiFi (UDP 8766, "FORJA?") y habla con ella en HTTP plano. */
-static int soc_up(void) {
-  if (g_soc_buf) return 1;
-  g_soc_buf = memalign(0x1000, 0x40000);
-  if (!g_soc_buf) return 0;
-  if (R_FAILED(socInit(g_soc_buf, 0x40000))) { free(g_soc_buf); g_soc_buf = NULL; return 0; }
-  return 1;
-}
-
 static int relay_discover(char *out, size_t cap) {
   if (!soc_up()) return 0;
   int s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
@@ -906,6 +1019,71 @@ static int try_relay(void) {
   return 0;
 }
 
+/* ------------------------------------------------------------------ */
+/* Autoactualización: compara con /downloads/latest.json de la web      */
+/* ------------------------------------------------------------------ */
+static int semver_gt(const char *a, const char *b) {
+  int x[3] = {0, 0, 0}, y[3] = {0, 0, 0};
+  sscanf(a, "%d.%d.%d", &x[0], &x[1], &x[2]);
+  sscanf(b, "%d.%d.%d", &y[0], &y[1], &y[2]);
+  for (int i = 0; i < 3; i++) if (x[i] != y[i]) return x[i] > y[i];
+  return 0;
+}
+
+static int install_cia(const u8 *data, size_t len) {
+  if (R_FAILED(amInit())) return 0;
+  Handle h;
+  if (R_FAILED(AM_StartCiaInstall(MEDIATYPE_SD, &h))) { amExit(); return 0; }
+  u32 written = 0;
+  Result rc = FSFILE_Write(h, &written, 0, data, (u32)len, 0);
+  if (R_FAILED(rc) || written != len) { AM_CancelCIAInstall(h); amExit(); return 0; }
+  rc = AM_FinishCiaInstall(h);
+  amExit();
+  return R_SUCCEEDED(rc);
+}
+
+static void maybe_update(void) {
+  if (!strcmp(VERSION, "dev") || g_relay) return;
+  char url[320];
+  snprintf(url, sizeof url, "%s/downloads/latest.json", g_site);
+  Resp r;
+  if (http_do(M_GET, url, NULL, NULL, 0, &r) != 0) return;
+  char ver[24] = "";
+  if (r.status == 200) json_get_str((char *)r.data, "version", ver, sizeof ver);
+  resp_free(&r);
+  if (!ver[0] || !semver_gt(ver, VERSION)) return;
+
+  int hb = envIsHomebrew();
+  set_notice("Actualizando a v%s…", ver);
+  snprintf(url, sizeof url, "%s/downloads/%s", g_site, hb ? "Forja3DS.3dsx" : "Forja3DS.cia");
+  Resp d;
+  if (http_do(M_GET, url, NULL, NULL, 0, &d) != 0 || d.status != 200 || d.len < 20000) {
+    if (d.data) resp_free(&d);
+    set_notice("No se pudo descargar la actualización v%s", ver);
+    return;
+  }
+  int ok = 0;
+  if (hb) {
+    const char *path = g_self[0] ? g_self : "sdmc:/3ds/Forja3DS.3dsx";
+    char tmp[240];
+    snprintf(tmp, sizeof tmp, "%s.new", path);
+    if (memcmp(d.data, "3DSX", 4) == 0) {
+      FILE *f = fopen(tmp, "wb");
+      if (f) {
+        ok = fwrite(d.data, 1, d.len, f) == d.len;
+        fclose(f);
+        if (ok) { remove(path); ok = rename(tmp, path) == 0; } else remove(tmp);
+      }
+    }
+  } else {
+    u32 hdr = d.len >= 4 ? (u32)d.data[0] | ((u32)d.data[1] << 8) | ((u32)d.data[2] << 16) | ((u32)d.data[3] << 24) : 0;
+    if (hdr == 0x2020) ok = install_cia(d.data, d.len);
+  }
+  resp_free(&d);
+  if (ok) set_notice("Actualizada a v%s. Reinicia la app para usarla.", ver);
+  else set_notice("No se pudo instalar la actualización v%s", ver);
+}
+
 static void worker(void *arg) {
   (void)arg;
   snprintf(g_site, sizeof g_site, "%s", DEFAULT_SITE);
@@ -913,11 +1091,11 @@ static void worker(void *arg) {
   snprintf(g_anon, sizeof g_anon, "%s", DEFAULT_ANON);
   load_session();
   load_config();
-  Result hrc = httpcInit(0x100000);
-  if (R_FAILED(hrc)) set_error("httpc no disponible (%08lX)", (unsigned long)hrc);
+  Result hrc = net_init() ? 0 : -1;
+  if (hrc) set_error("No se pudo iniciar la red (sockets/TLS)");
 
   char dummy[8] = "";
-  int fails = 0;
+  int fails = 0, upd_done = 0;
   int cfg_ok = g_url[0] && g_anon[0], authed = 0;
   time_t last_beat = 0, last_try = 0, last_poll = 0;
 
@@ -949,7 +1127,7 @@ static void worker(void *arg) {
         if (!cfg_ok && R_FAILED(g_cfg_rc) && (u32)g_cfg_rc != NO_NETWORK) {
           set_state(ST_CONFIG, "HTTPS falló. Buscando la app de escritorio de Forja en tu WiFi…");
           cfg_ok = try_relay();
-          if (!cfg_ok) set_error("Sin HTTPS (%08lX) y no encuentro la app de escritorio. Ábrela en tu PC (misma WiFi) o pulsa A para escribir su IP.", (unsigned long)g_cfg_rc);
+          if (!cfg_ok) set_error("No hay HTTPS (código %d) y no encuentro la app de escritorio. Ábrela en tu PC (misma WiFi) o toca «Escribir IP».", (int)-g_cfg_rc);
         }
         if (!cfg_ok && g_state != ST_ERROR) set_error("No se pudo conectar con %s", g_site);
       }
@@ -961,7 +1139,7 @@ static void worker(void *arg) {
         if (!authed && !g_relay && R_FAILED(g_net_rc) && (u32)g_net_rc != NO_NETWORK) {
           set_state(ST_AUTH, "HTTPS falló. Buscando la app de escritorio de Forja en tu WiFi…");
           if (try_relay()) { set_state(ST_AUTH, "Puente local encontrado. Iniciando sesión…"); authed = login(); }
-          else set_error("Sin HTTPS (%08lX) y no encuentro la app de escritorio. Ábrela en tu PC (misma WiFi) o pulsa A para escribir su IP.", (unsigned long)g_net_rc);
+          else set_error("No hay HTTPS (código %d) y no encuentro la app de escritorio. Ábrela en tu PC (misma WiFi) o toca «Escribir IP».", (int)-g_net_rc);
         }
         if (authed && g_device[0]) { set_state(ST_RUN, "Conectada"); heartbeat(); last_beat = now; }
         else if (authed) { set_state(ST_PAIR, "Pidiendo código…"); last_poll = 0; }
@@ -977,6 +1155,7 @@ static void worker(void *arg) {
         else set_error("Sin respuesta del servidor");
       }
     } else {
+      if (!upd_done) { upd_done = 1; maybe_update(); }
       if (now - last_beat >= 15) { last_beat = now; heartbeat(); }
       if (now - last_poll >= 2) {
         last_poll = now;
@@ -1008,11 +1187,13 @@ static void worker(void *arg) {
     }
     svcSleepThread(100 * 1000 * 1000LL);   /* 100 ms */
   }
-  httpcExit();
+  if (g_curl) curl_easy_cleanup(g_curl);
+  curl_global_cleanup();
   if (g_soc_buf) socExit();
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+  if (argc > 0 && argv && argv[0]) snprintf(g_self, sizeof g_self, "%s%s", strncmp(argv[0], "sdmc:", 5) ? "sdmc:" : "", argv[0]);
   gfxInitDefault();
   C3D_Init(C3D_DEFAULT_CMDBUF_SIZE);
   C2D_Init(C2D_DEFAULT_MAX_OBJECTS);
@@ -1023,6 +1204,7 @@ int main(void) {
   LightLock_Init(&g_lock);
   osSetSpeedupEnable(true);
   aptSetSleepAllowed(false);
+  psInit();   /* aleatoriedad para mbedTLS */
 
   s32 prio = 0;
   svcGetThreadPriority(&prio, CUR_THREAD_HANDLE);
@@ -1032,18 +1214,15 @@ int main(void) {
   while (aptMainLoop()) {
     hidScanInput();
     if (hidKeysDown() & KEY_START) break;
-    if (hidKeysDown() & KEY_A) {
-      LightLock_Lock(&g_lock); State cur = g_state; LightLock_Unlock(&g_lock);
-      if (cur == ST_ERROR || cur == ST_CONFIG) {
-        SwkbdState sw; char ip[40] = "";
-        swkbdInit(&sw, SWKBD_TYPE_NUMPAD, 2, 21);
-        swkbdSetNumpadKeys(&sw, '.', ':');
-        swkbdSetHintText(&sw, "IP del PC, ej. 192.168.1.20");
-        swkbdSetValidation(&sw, SWKBD_NOTEMPTY_NOTBLANK, 0, 0);
-        if (swkbdInputText(&sw, ip, sizeof ip) == SWKBD_BUTTON_CONFIRM && ip[0]) {
-          LightLock_Lock(&g_lock); snprintf(g_manual_ip, sizeof g_manual_ip, "%s", ip); g_manual_new = 1; LightLock_Unlock(&g_lock);
-        }
-      }
+    u32 kd = hidKeysDown();
+    touchPosition tp;
+    hidTouchRead(&tp);
+    LightLock_Lock(&g_lock); State cur = g_state; LightLock_Unlock(&g_lock);
+    if (g_ip_open) {
+      if (kd & KEY_B) g_ip_open = 0;
+      else if (kd & KEY_TOUCH) ip_tap(tp.px, tp.py);
+    } else if (cur == ST_ERROR && ((kd & KEY_A) || ((kd & KEY_TOUCH) && tp.px >= 12 && tp.px < 308 && tp.py >= 188 && tp.py < 224))) {
+      ip_open();
     }
 
     /* Copia del estado para dibujar sin retener el bloqueo */
@@ -1063,10 +1242,12 @@ int main(void) {
     C2D_TextBufClear(g_tbuf);
     C2D_TargetClear(top, C_BG1);
     C2D_SceneBegin(top);
-    draw_top(tick, st, status, code, done, pl, pcur, ptotal, plabel, pup);
+    if (g_ip_open) draw_top(tick, ST_CONFIG, "Escribe la IP de tu PC con la pantalla táctil (la ves en Forja de escritorio → Este equipo).", code, done, pl, pcur, ptotal, plabel, pup);
+    else draw_top(tick, st, status, code, done, pl, pcur, ptotal, plabel, pup);
     C2D_TargetClear(bot, C_BG1);
     C2D_SceneBegin(bot);
-    draw_bottom(st, nacts, acts, pl, pcur, ptotal, plabel, diag);
+    if (g_ip_open) draw_keypad(tick);
+    else draw_bottom(st, nacts, acts, pl, pcur, ptotal, plabel, diag);
     C3D_FrameEnd(0);
     tick++;
   }
@@ -1076,6 +1257,7 @@ int main(void) {
   C2D_TextBufDelete(g_tbuf);
   C2D_Fini();
   C3D_Fini();
+  psExit();
   gfxExit();
   return 0;
 }

@@ -18,7 +18,7 @@ ifneq ($(DEFAULT_URL),)
 CFLAGS += -DDEFAULT_URL=\"$(DEFAULT_URL)\" -DDEFAULT_ANON=\"$(DEFAULT_ANON)\"
 endif
 LDFLAGS := -specs=3dsx.specs -g $(ARCH) -Wl,-Map,$(TARGET).map -L$(CTRULIB)/lib -L$(DEVKITPRO)/portlibs/3ds/lib
-LIBS   := -lcitro2d -lcitro3d -lctru -lm
+LIBS   := -lcurl -lmbedtls -lmbedx509 -lmbedcrypto -lz -lcitro2d -lcitro3d -lctru -lm
 
 export PATH := $(DEVKITPRO)/tools/bin:$(DEVKITARM)/bin:$(PATH)
 
@@ -27,7 +27,7 @@ all: $(TARGET).3dsx
 # .cia (instalable con FBI): requiere makerom y bannertool en el PATH
 cia: $(TARGET).cia
 
-$(TARGET).elf: source/main.c source/roots.h
+$(TARGET).elf: source/main.c source/cacert.h
 	$(CC) $(CFLAGS) $< $(LDFLAGS) $(LIBS) -o $@
 
 $(TARGET).smdh: icon.png

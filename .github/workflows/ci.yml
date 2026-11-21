@@ -28,4 +28,8 @@ jobs:
     container: devkitpro/devkitarm:latest
     steps:
       - uses: actions/checkout@v4
+      - name: Librerías de la 3DS (curl, mbedTLS)
+        run: |
+          ls /opt/devkitpro/portlibs/3ds/lib 2>/dev/null | grep -E 'libcurl|libmbedtls' || dkp-pacman -Sy --noconfirm 3ds-curl 3ds-mbedtls 3ds-zlib
+          ls /opt/devkitpro/portlibs/3ds/lib | grep -E 'curl|mbed|libz'
       - run: make -C agent3ds

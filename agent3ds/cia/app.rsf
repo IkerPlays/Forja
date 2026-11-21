@@ -115,6 +115,7 @@ AccessControlInfo:
     - nwm::EXT
     - nwm::UDS
     - ptm:sysm
+    - ps:ps
     - ptm:u
     - pxi:dev
     - soc:U
