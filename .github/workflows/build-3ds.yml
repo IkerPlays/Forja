@@ -23,9 +23,10 @@ jobs:
           git clone --depth 1 https://github.com/3DSGuy/Project_CTR /tmp/ctr
           make -C /tmp/ctr/makerom -j"$(nproc)"
           install -m755 /tmp/ctr/makerom/bin/makerom /usr/local/bin/makerom
-          git clone --depth 1 --recursive https://github.com/Steveice10/bannertool /tmp/bannertool
-          make -C /tmp/bannertool -j"$(nproc)"
-          install -m755 /tmp/bannertool/output/linux-x86_64/bannertool /usr/local/bin/bannertool
+          git clone --depth 1 --recursive https://github.com/carstene1ns/3ds-bannertool /tmp/bannertool
+          cmake -S /tmp/bannertool -B /tmp/bannertool/build -DCMAKE_BUILD_TYPE=Release
+          cmake --build /tmp/bannertool/build -j"$(nproc)"
+          install -m755 "$(find /tmp/bannertool/build -name bannertool -type f | head -1)" /usr/local/bin/bannertool
       - name: Compilar .cia
         run: make -C agent3ds cia
       # Los artefactos de Actions tienen cuota; las Releases no.
