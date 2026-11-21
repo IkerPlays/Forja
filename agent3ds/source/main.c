@@ -949,7 +949,9 @@ static void draw_bottom(State st, int nacts, const Act *acts, int pl, int pcur, 
 static void heartbeat(void) {
   Buf b = {0};
   buf_str(&b, "{\"p_device\":"); buf_json_str(&b, g_device);
-  buf_str(&b, ",\"p_info\":{\"proto\":2,\"Agente\":\"Forja3DS " VERSION "\",\"Consola\":\"Nintendo 3DS\"}}");
+  u32 me = (u32)gethostid();   /* IP de la consola: la app de escritorio la usa para el mando y la pantalla (NTR) */
+  buf_printf(&b, ",\"p_info\":{\"proto\":2,\"Agente\":\"Forja3DS " VERSION "\",\"Consola\":\"Nintendo 3DS\",\"ip\":\"%u.%u.%u.%u\"}}",
+             (unsigned)(me & 0xFF), (unsigned)((me >> 8) & 0xFF), (unsigned)((me >> 16) & 0xFF), (unsigned)((me >> 24) & 0xFF));
   Resp r;
   if (rpc("device_heartbeat", b.p, &r)) resp_free(&r);
   free(b.p);

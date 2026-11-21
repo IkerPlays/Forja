@@ -10,6 +10,7 @@ const roots = require('./fsroots')
 const input = require('./input')
 const relay = require('./relay')
 const { PadSender } = require('./pad')
+const ntr = require('./ntr')
 
 const DEFAULT_WEB_URL = process.env.FORJA_URL || 'https://forja-hub.netlify.app'
 const startHidden = process.argv.includes('--hidden')
@@ -142,6 +143,16 @@ ipcMain.on('forja:input:mouse', (_e, m) => { if (settings.allowInput) void input
 ipcMain.on('forja:input:key', (_e, m) => { if (settings.allowInput) void input.key(m) })
 ipcMain.on('forja:pad', (_e, ip, port, state) => { if (!padSender) padSender = new PadSender(); padSender.update(String(ip), port, state) })
 
+/* ---------------- Pantalla de la 3DS (NTR / NTR-HR) ---------------- */
+let ntrRx = null
+handle('ntr:start', async (ip, opts) => {
+  if (!ntrRx) ntrRx = new ntr.NtrReceiver({ onFrame: (screen, jpeg) => { if (win && !win.isDestroyed()) win.webContents.send('forja:ntr-frame', screen, new Uint8Array(jpeg)) }, onLog: m => console.log(m) })
+  const accepted = await ntr.startRemotePlay(String(ip), opts || {})
+  return { accepted, frames: ntrRx.frames }
+})
+handle('ntr:status', () => ({ on: !!ntrRx, frames: ntrRx ? ntrRx.frames : 0, lastFrameAgoMs: ntrRx && ntrRx.lastFrameAt ? Date.now() - ntrRx.lastFrameAt : null }))
+handle('ntr:stop', () => { if (ntrRx) { ntrRx.stop(); ntrRx = null } })
+
 /* ---------------- Autoactualización del núcleo ---------------- */
 // Cada release publica desktop-core.js + latest.json en la web. El shell instalado carga el núcleo más reciente
 // que haya descargado (userData/core), así la lógica se actualiza sin reinstalar el programa.
@@ -196,6 +207,6 @@ app.whenReady().then(async () => {
   setTimeout(() => void checkUpdate(false), 20_000)
   setInterval(() => void checkUpdate(false), 6 * 3600 * 1000)
 })
-app.on('before-quit', () => { quitting = true; if (relayHandle) relayHandle.stop(); if (padSender) padSender.close() })
+app.on('before-quit', () => { quitting = true; if (relayHandle) relayHandle.stop(); if (padSender) padSender.close(); if (ntrRx) ntrRx.stop() })
 app.on('window-all-closed', () => { /* se queda en la bandeja */ })
 }

@@ -33,13 +33,14 @@ La consola entra con una cuenta anónima **limitada a su propio dispositivo** (n
 
 Si aun así falla, la pantalla inferior muestra el resultado de las dos pruebas (`TLS verificado / sin verificar`) y el código de error. **Plan B:** abre la **app de escritorio** en un PC de la **misma WiFi** (puente local, activado por defecto): la 3DS lo busca sola (UDP 8766) y habla con él por HTTP en tu red. También puedes tocar **«Escribir la IP del PC»** y teclearla con el teclado numérico en pantalla (la consola ya rellena el principio de la IP). En Windows, si no te encuentra, usa en *Este equipo* el botón **Abrir puertos en el cortafuegos**.
 
-### Mando y pantalla táctil de la 3DS
-Los navegadores no pueden enviar UDP. Con la **app de escritorio abierta en un PC de tu red**: pon la **IP de la 3DS** en su ficha (Ajustes → Internet → Ajustes de conexión) y activa **Input Redirection** en Luma3DS (L+↓+Select → Rosalina → Input Redirection → Start). Desde la tablet (*3DS → Jugar*) tienes botones, Circle Pad, C-Stick y pantalla táctil.
+### Pantalla de la 3DS en el PC y la tablet (NTR / NTR-HR)
+Requisitos: la 3DS con **BootNTR** (idealmente [NTR-HR](https://github.com/xzn/ntr-hr), que da 60–90 fps en New 3DS) y un juego abierto; la **app de escritorio** de Forja abierta en un PC de la misma WiFi.
+1. Forja3DS informa de la IP de la consola (o pónla a mano en su ficha).
+2. En *3DS → Jugar* pulsa **Ver**. La app de escritorio manda a NTR la orden de «remote play» (TCP 8000), recibe los fotogramas JPEG por UDP 8001, los recompone (las pantallas llegan giradas 90°) y los emite por WebRTC: verás la superior y, debajo, la inferior. **Tocar la inferior = pantalla táctil** de la 3DS.
+3. Si no hay imagen: NTR no está activo, PC y 3DS no comparten red, o el cortafuegos bloquea UDP 8001 (usa el botón de *Este equipo*). En NTR-HR (X+Y) también puedes poner la IP del PC y arrancar el remote play desde la propia 3DS.
 
-### Pantalla de la 3DS
-La consola no emite vídeo. Abre un visor de pantalla de 3DS (NTR/Snickerstream) o una capturadora en un PC y compártelo (*Jugar → Compartir desde aquí*).
-
-> **Honestidad sobre las pruebas:** todo se compila y pasa pruebas automáticas (rutas seguras, protocolo del mando, puente local), pero no se ha podido probar con una 3DS ni con un PC real. Si algo falla, el estado y los errores salen en la pantalla superior de la 3DS y en *Este equipo*.
+### Mando de la 3DS
+Los navegadores no pueden enviar UDP, así que los botones pasan por la **app de escritorio** del PC (misma WiFi): activa **Input Redirection** en Luma3DS (L+↓+Select → Rosalina → Input Redirection → Start). La IP sale sola de Forja3DS (o de la ficha). Desde la tablet (*3DS → Jugar*): botones, Circle Pad, C-Stick y táctil.
 
 ## Actualizaciones automáticas
 * **3DS**: al conectarse comprueba `/downloads/latest.json` de la web; si hay versión nueva descarga el `.3dsx` (si la abriste desde el Homebrew Launcher) o instala el `.cia` (si la tienes instalada) y avisa: «Reinicia la app para usarla».

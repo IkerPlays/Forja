@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Cast, Maximize, MonitorUp, Video, VideoOff, MousePointer2, Keyboard, KeyboardIcon, Camera, Mic } from 'lucide-react'
 import { Link, ScreenSharer, ScreenViewer, SCREEN_CONSTRAINTS, tuneForMotion, type Sources, type ViewerStreams } from '../lib/devices'
 import { errMsg } from '../lib/util'
+import { touchFromComposite } from '../lib/ntrSource'
 import { useToast } from './ui'
 
 const clamp = (v: number) => Math.min(1, Math.max(0, v))
@@ -11,7 +12,7 @@ const clamp = (v: number) => Math.min(1, Math.max(0, v))
  *  · Ver: cualquier navegador del estudio. Pantalla + cámara a la vez (como una videollamada).
  *  · Compartir: el equipo que tiene la pantalla (PC) o que muestra el visor/capturadora de la 3DS.
  */
-export default function ScreenView({ link, kind, remoteControl }: { link: Link; kind: 'pc' | '3ds'; remoteControl?: boolean }) {
+export default function ScreenView({ link, kind, remoteControl, onTouch3ds }: { link: Link; kind: 'pc' | '3ds'; remoteControl?: boolean; onTouch3ds?: (t: [number, number] | null) => void }) {
   const toast = useToast()
   const [mode, setMode] = useState<'view' | 'share'>('view')
   const [status, setStatus] = useState('Buscando emisor…')
@@ -117,7 +118,17 @@ export default function ScreenView({ link, kind, remoteControl }: { link: Link; 
   }, [control, remoteControl, link])
 
   // Táctil: toque = clic · arrastrar = arrastrar · mantener = clic derecho · dos dedos = desplazar
+  /** 3DS: tocar la pantalla inferior del vídeo = tocar la pantalla táctil de la consola */
+  function touch3ds(e: React.PointerEvent<HTMLVideoElement>, end = false) {
+    if (!onTouch3ds) return false
+    if (end) { onTouch3ds(null); return true }
+    const n = norm(e)
+    const t = touchFromComposite(n.x, n.y)
+    onTouch3ds(t)
+    return true
+  }
   function onDown(e: React.PointerEvent<HTMLVideoElement>) {
+    if (kind === '3ds' && onTouch3ds && mainStream) { e.currentTarget.setPointerCapture(e.pointerId); touch3ds(e); return }
     if (!control || !remoteControl) return
     e.currentTarget.setPointerCapture(e.pointerId)
     if (e.pointerType === 'touch') {
@@ -137,6 +148,7 @@ export default function ScreenView({ link, kind, remoteControl }: { link: Link; 
     send({ k: 'mouse', a: 'down', b: e.button, ...norm(e) })
   }
   function onMove(e: React.PointerEvent<HTMLVideoElement>) {
+    if (kind === '3ds' && onTouch3ds && mainStream) { if (e.buttons || e.pointerType === 'touch') touch3ds(e); return }
     if (e.pointerType === 'touch') {
       const t = touches.current.get(e.pointerId); if (!t) return
       if (press.current && Math.hypot(e.clientX - t.x, e.clientY - t.y) > 8) press.current.moved = true
@@ -151,6 +163,7 @@ export default function ScreenView({ link, kind, remoteControl }: { link: Link; 
     send({ k: 'mouse', a: 'move', ...norm(e) })
   }
   function onUp(e: React.PointerEvent<HTMLVideoElement>) {
+    if (kind === '3ds' && onTouch3ds && mainStream) { touch3ds(e, true); return }
     if (e.pointerType === 'touch') {
       const was = touches.current.size
       touches.current.delete(e.pointerId)

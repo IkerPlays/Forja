@@ -41,6 +41,35 @@ const relay = require('../src/core/relay')
   const reply = await new Promise(res => { const s = dgram.createSocket('udp4'); s.on('message', m => { s.close(); res(String(m)) }); s.send('FORJA?', 18766, '127.0.0.1') })
   assert.match(reply, /^FORJA http:\/\/.+:18765$/)
   h.stop()
+  // NTR: reconstrucción de fotogramas JPEG a partir de trozos UDP + paquete de inicio
+  const ntr = require('../src/core/ntr')
+  const ip = ntr.initPacket({ quality: 80, topPriority: true, priority: 3, qos: 16 })
+  assert.equal(ip.length, 84); assert.equal(ip.readUInt32LE(0), 0x12345678); assert.equal(ip.readUInt32LE(12), 901)
+  assert.equal(ip.readUInt32LE(16), (1 << 8) | 3); assert.equal(ip.readUInt32LE(20), 80); assert.equal(ip.readUInt32LE(24), (32 << 16) >>> 0)
+  const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8]), require('node:crypto').randomBytes(5000), Buffer.from([0xff, 0xd9])])
+  const got = []
+  const asm = new ntr.FrameAssembler((screen, buf) => got.push({ screen, buf }))
+  const frag = (frame, screenBit, data) => { const out = []; for (let i = 0, n = 0; i < data.length; i += 1444, n++) { const last = i + 1444 >= data.length; out.push(Buffer.concat([Buffer.from([frame, (last ? 0x10 : 0) | screenBit, 0, n]), data.subarray(i, i + 1444)])) } return out }
+  const topPk = frag(7, 1, jpeg), botPk = frag(7, 0, jpeg.subarray(0, 2000))
+  // los trozos de las dos pantallas se intercalan
+  for (let i = 0; i < Math.max(topPk.length, botPk.length); i++) { if (topPk[i]) asm.push(topPk[i]); if (botPk[i]) asm.push(botPk[i]) }
+  assert.equal(got.length, 2); assert.equal(got.find(g => g.screen === 'top').buf.equals(jpeg), true); assert.equal(got.find(g => g.screen === 'bottom').buf.length, 2000)
+  const lost = frag(8, 1, jpeg); lost.splice(1, 1); got.length = 0; lost.forEach(p => asm.push(p)); assert.equal(got.length, 0)   // un trozo perdido descarta el fotograma
+  // UDP de verdad
+  const frames = []
+  const rx = new ntr.NtrReceiver({ port: 18001, onFrame: (s, b) => frames.push([s, b]) })
+  const tx = require('node:dgram').createSocket('udp4')
+  for (const pk of frag(9, 1, jpeg)) tx.send(pk, 18001, '127.0.0.1')
+  await new Promise(r => setTimeout(r, 300)); tx.close(); rx.stop()
+  assert.equal(frames.length, 1); assert.equal(frames[0][1].equals(jpeg), true)
+  // TCP: se envía el paquete de inicio a un "NTR" falso
+  const fake = require('node:net').createServer(sock => sock.once('data', d => { fake.got = d })); await new Promise(r => fake.listen(0, '127.0.0.1', r))
+  const origConnect = require('node:net').connect
+  require('node:net').connect = o => origConnect({ ...o, port: fake.address().port })
+  assert.equal(await ntr.startRemotePlay('127.0.0.1', { quality: 70 }, 3000), true)
+  require('node:net').connect = origConnect; fake.close()
+  assert.equal(fake.got.length, 84); assert.equal(fake.got.readUInt32LE(12), 901); assert.equal(fake.got.readUInt32LE(20), 70)
+
   // Autoactualización del núcleo: se empaqueta, se verifica el sha256 y se ejecuta con un electron simulado
   const crypto = require('node:crypto'), fssync = require('node:fs'), Module = require('node:module')
   const { semverGt, loadDownloadedCore } = require('../src/loader')

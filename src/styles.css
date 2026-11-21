@@ -218,3 +218,4 @@ select { width: auto; }
 .chip.ok-chip { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 50%, var(--line)); }
 .share-opts { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; margin: 10px 0 12px; } .share-opts label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
 .pip { position: absolute; right: 10px; bottom: 10px; width: 24%; min-width: 120px; max-width: 280px; aspect-ratio: 16/9; border-radius: 10px; border: 2px solid var(--accent); background: #000; object-fit: cover; box-shadow: var(--shadow); } .pip.hidden { display: none; }
+.crumbs .root-name { margin-left: 4px; font-weight: 700; }

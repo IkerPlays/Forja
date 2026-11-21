@@ -22,6 +22,10 @@ export interface ForjaDesktop {
   }
   relayStatus(): Promise<{ on: boolean; addresses: string[]; requests: number; error?: string }>
   openFirewall(): Promise<boolean>
+  ntrStart(ip: string, opts?: { quality?: number; topPriority?: boolean; priority?: number; qos?: number }): Promise<{ accepted: boolean; frames: number }>
+  ntrStatus(): Promise<{ on: boolean; frames: number; lastFrameAgoMs: number | null }>
+  ntrStop(): Promise<void>
+  onNtrFrame(cb: (screen: 'top' | 'bottom', jpeg: Uint8Array) => void): () => void
   checkUpdate(): Promise<{ ok: boolean; current?: string; latest?: string; downloaded?: boolean; error?: string }>
   applyUpdate(): Promise<void>
   inputMouse(m: Record<string, unknown>): void

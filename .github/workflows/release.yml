@@ -31,13 +31,14 @@ jobs:
           V="${RAW_VERSION#v}"
           echo "version=$V" >> "$GITHUB_OUTPUT"
           echo "tag=v$V" >> "$GITHUB_OUTPUT"
-      - name: Borrar releases antiguas (las que no tienen etiqueta vX.Y.Z)
+      - name: Dejar solo la versión nueva (borra las releases y etiquetas anteriores)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh api "repos/${{ github.repository }}/releases?per_page=100" --jq '.[] | select(.tag_name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$") | not) | [.id, .tag_name] | @tsv' |
+          NEW="${{ steps.v.outputs.tag }}"
+          gh api "repos/${{ github.repository }}/releases?per_page=100" --jq ".[] | select(.tag_name != \"$NEW\") | [.id, .tag_name] | @tsv" |
           while IFS=$'\t' read -r id tag; do
-            echo "Borrando release antigua: $tag"
+            echo "Borrando release anterior: $tag"
             gh api -X DELETE "repos/${{ github.repository }}/releases/$id" || true
             gh api -X DELETE "repos/${{ github.repository }}/git/refs/tags/$tag" || true
           done

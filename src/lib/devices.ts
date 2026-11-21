@@ -142,8 +142,16 @@ export class Link {
   onSignal(cb: (s: Signal) => void) { this.sh.signalCbs.add(cb); this.mine.signal.add(cb); return () => { this.sh.signalCbs.delete(cb); this.mine.signal.delete(cb) } }
   onInput(cb: (m: any) => void) { this.sh.inputCbs.add(cb); this.mine.input.add(cb); return () => { this.sh.inputCbs.delete(cb); this.mine.input.delete(cb) } }
   onPresence(cb: (peers: Peer[]) => void) { this.sh.presenceCbs.add(cb); this.mine.presence.add(cb); return () => { this.sh.presenceCbs.delete(cb); this.mine.presence.delete(cb) } }
-  signal(s: Omit<Signal, 'from'>) { return this.sh.ch.send({ type: 'broadcast', event: 'signal', payload: { ...s, from: this.sh.clientId } }) }
-  input(payload: Record<string, unknown>) { return this.sh.ch.send({ type: 'broadcast', event: 'input', payload }) }
+  /** Los Link de una misma ventana comparten canal: Realtime no devuelve lo propio, así que se entrega en local. */
+  signal(s: Omit<Signal, 'from'>) {
+    const full: Signal = { ...s, from: this.sh.clientId }
+    if (!s.to || s.to === this.sh.clientId) setTimeout(() => this.sh.signalCbs.forEach(cb => { if (!this.mine.signal.has(cb)) cb(full) }), 0)
+    return this.sh.ch.send({ type: 'broadcast', event: 'signal', payload: full })
+  }
+  input(payload: Record<string, unknown>) {
+    this.sh.inputCbs.forEach(cb => { if (!this.mine.input.has(cb)) cb(payload) })
+    return this.sh.ch.send({ type: 'broadcast', event: 'input', payload })
+  }
   close() {
     this.mine.signal.forEach(cb => this.sh.signalCbs.delete(cb))
     this.mine.input.forEach(cb => this.sh.inputCbs.delete(cb))
@@ -227,7 +235,12 @@ export class ScreenSharer {
   private async offerTo(viewerId: string) {
     this.drop(viewerId)
     if (this.idle) { clearTimeout(this.idle); this.idle = null }
-    const src = await this.ensure()
+    let src: Sources
+    try { src = await this.ensure() } catch (e) {
+      // p. ej. la 3DS no envía imagen: se avisa al espectador en vez de dejarle esperando
+      void this.link.signal({ kind: 'leave', to: viewerId, data: { error: e instanceof Error ? e.message : String(e) } })
+      return
+    }
     const peer = new Peer_(this.link, viewerId, st => { if (st === 'failed' || st === 'closed' || st === 'disconnected') this.drop(viewerId) })
     this.peers.set(viewerId, peer)
     const meta: Record<string, string> = {}
@@ -272,18 +285,23 @@ export class ScreenViewer {
   private joined = false
   private meta: Record<string, string> = {}
   private streams = new Map<string, MediaStream>()
+  private sharerHere = false
+  private retry: ReturnType<typeof setInterval>
   constructor(private link: Link, private onStream: (s: ViewerStreams | null) => void, private onStatus: (s: string) => void) {
     this.off = link.onSignal(async s => {
       if (s.kind === 'offer') await this.accept(s.from, s.data, s.meta ?? {})
       else if (s.kind === 'ice') await this.peer?.addIce(s.data)
-      else if (s.kind === 'leave' && this.peer?.remoteId === s.from) this.reset('El emisor dejó de compartir')
+      else if (s.kind === 'leave' && (this.peer?.remoteId === s.from || s.data?.error)) this.reset(s.data?.error || 'El emisor dejó de compartir')
     })
     this.offPresence = link.onPresence(peers => {
       const sharer = peers.find(p => p.roles.includes('sharer'))
+      this.sharerHere = !!sharer
       if (sharer && !this.peer && !this.joined) { this.joined = true; this.onStatus('Conectando…'); void link.signal({ kind: 'join' }) }
       if (!sharer && this.peer) this.reset('Nadie está compartiendo pantalla')
       if (!sharer && !this.peer) { this.joined = false; this.onStatus('Nadie está compartiendo pantalla en este dispositivo') }
     })
+    // Si el emisor falló (p. ej. la 3DS aún no envía imagen) se reintenta solo cada pocos segundos
+    this.retry = setInterval(() => { if (this.sharerHere && !this.peer) { this.joined = true; void this.link.signal({ kind: 'join' }) } }, 8000)
   }
   private emit() {
     const all = [...this.streams.values()]
@@ -316,6 +334,6 @@ export class ScreenViewer {
   }
   leave() {
     if (this.peer) void this.link.signal({ kind: 'leave', to: this.peer.remoteId })
-    this.off(); this.offPresence(); this.peer?.close(); this.peer = null
+    clearInterval(this.retry); this.off(); this.offPresence(); this.peer?.close(); this.peer = null
   }
 }

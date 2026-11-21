@@ -115,7 +115,7 @@ export default function FileBrowser({ device, client, p2p, startPath = '/', dirA
       onDrop={e => { e.preventDefault(); setDrag(false); if (e.dataTransfer.files.length) void upload(e.dataTransfer.files) }}>
       <div className="files-bar">
         <div className="crumbs">
-          <button onClick={() => setPath('/')} aria-label="Raíz"><Home size={15} /></button>
+          <button onClick={() => setPath('/')} aria-label="Raíz"><Home size={15} />{device.kind === '3ds' ? <span className="root-name">MicroSD</span> : null}</button>
           {crumbs.map((c, i) => (
             <span key={i}><ChevronRight size={13} /><button onClick={() => setPath('/' + crumbs.slice(0, i + 1).join('/'))}>{c}</button></span>
           ))}

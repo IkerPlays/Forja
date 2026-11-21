@@ -3,6 +3,7 @@ import { desktop } from './native'
 import { DesktopPcAgent } from './desktopAgent'
 import { Link, ScreenSharer, SCREEN_CONSTRAINTS, type Sources } from './devices'
 import { P2PAnswerer } from './p2p'
+import { NtrSource } from './ntrSource'
 import type { Device } from './types'
 
 export interface HostState { running: boolean; deviceId?: string; hostname?: string; viewers: number; consoles: number; log: string[]; error?: string }
@@ -18,7 +19,7 @@ class DesktopHost {
   private link?: Link
   private sharer?: ScreenSharer
   private p2p?: P2PAnswerer
-  private ds = new Map<string, { link: Link; off: () => void }>()
+  private ds = new Map<string, { link: Link; off: () => void; sharer: ScreenSharer; key: string }>()
   private dsChannel?: ReturnType<ReturnType<typeof sb>['channel']>
   private studioId?: string
   private userId?: string
@@ -99,19 +100,28 @@ class DesktopHost {
     await this.link.ready.catch(e => this.patch({ error: e instanceof Error ? e.message : String(e) }))
   }
 
-  /** Las 3DS del estudio con IP reciben el mando por UDP desde este PC. */
+  /** Las 3DS del estudio con IP (la de su ficha o la que informa Forja3DS) reciben el mando por UDP y emiten su pantalla por NTR. */
   private async syncConsoles() {
     if (!this.studioId) return
     const { data } = await sb().from('devices').select('*').eq('studio_id', this.studioId).eq('kind', '3ds')
-    const wanted = new Map<string, Device>()
-    for (const d of (data ?? []) as Device[]) if ((d.config as { ip?: string }).ip) wanted.set(d.id, d)
-    for (const [id, h] of this.ds) if (!wanted.has(id)) { h.off(); h.link.close(); this.ds.delete(id) }
-    for (const [id, d] of wanted) {
+    const wanted = new Map<string, { d: Device; ip: string; port: number }>()
+    for (const d of (data ?? []) as Device[]) {
+      const cfg = d.config as { ip?: string; input_port?: number }
+      const ip = (cfg.ip || (d.info as { ip?: string }).ip || '').trim()
+      if (ip) wanted.set(d.id, { d, ip, port: cfg.input_port || 4950 })
+    }
+    for (const [id, h] of this.ds) {
+      const w = wanted.get(id)
+      if (!w || h.key !== `${w.ip}:${w.port}`) { h.off(); h.sharer.stop(); h.link.close(); this.ds.delete(id) }
+    }
+    for (const [id, w] of wanted) {
       if (this.ds.has(id)) continue
-      const link = new Link(id, 'bridge')
-      const cfg = d.config as { ip: string; input_port?: number }
-      const off = link.onInput(m => { if (m?.k === 'pad') desktop!.padSend(cfg.ip, cfg.input_port || 4950, m.s) })
-      this.ds.set(id, { link, off })
+      const link = new Link(id, ['bridge', 'sharer'])
+      const off = link.onInput(m => { if (m?.k === 'pad') desktop!.padSend(w.ip, w.port, m.s) })
+      // La pantalla se pide por NTR/NTR-HR solo cuando alguien mira
+      const sharer = new ScreenSharer(link, async (): Promise<Sources> => ({ screen: await new NtrSource(w.ip).start() }), () => {})
+      this.ds.set(id, { link, off, sharer, key: `${w.ip}:${w.port}` })
+      this.log(`3DS «${w.d.name}» enlazada (${w.ip}): mando y pantalla`)
     }
     this.patch({ consoles: this.ds.size })
   }
@@ -125,7 +135,7 @@ class DesktopHost {
     this.sharer?.stop(); this.sharer = undefined
     this.p2p?.stop(); this.p2p = undefined
     this.link?.close(); this.link = undefined
-    for (const h of this.ds.values()) { h.off(); h.link.close() }
+    for (const h of this.ds.values()) { h.off(); h.sharer.stop(); h.link.close() }
     this.ds.clear()
     if (this.dsChannel) { void sb().removeChannel(this.dsChannel); this.dsChannel = undefined }
     this.patch({ running: false, deviceId: undefined, viewers: 0, consoles: 0 })

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Activity, FolderOpen, Gamepad2, MonitorPlay, Settings2, Terminal, Trash2, Copy, Download } from 'lucide-react'
+import { ChevronDown, Activity, FolderOpen, Gamepad2, MonitorPlay, Settings2, Terminal, Trash2, Copy, Download } from 'lucide-react'
 import { sb, readConfig } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import PcFolderPanel from './PcFolderPanel'
@@ -64,7 +64,9 @@ export default function DeviceConsole({ device, onChanged, onDeleted, startPath,
   const lastSent = useRef(0)
   const pending = useRef<PadState | null>(null)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const lastPad = useRef<PadState>({ b: 0, cx: 0, cy: 0, sx: 0, sy: 0, t: null })
   const sendPad = useCallback((s: PadState) => {
+    lastPad.current = s
     if (!link) return
     const flush = () => { timer.current = null; if (pending.current) { void link.input({ k: 'pad', s: pending.current }); pending.current = null; lastSent.current = performance.now() } }
     pending.current = s
@@ -109,7 +111,13 @@ export default function DeviceConsole({ device, onChanged, onDeleted, startPath,
           <div className="play">
             {linkErr ? <div className="callout error">{linkErr}</div> : link ? (
               <>
-                <ScreenView link={link} kind="3ds" />
+                <details className="faq howto"><summary>¿Cómo veo la pantalla de la 3DS y uso el mando?<ChevronDown size={15} /></summary>
+                  <ol className="muted small">
+                    <li><strong>Pantalla:</strong> en la 3DS ejecuta <strong>BootNTR</strong> (NTR-HR) y abre un juego. Deja la <strong>app de escritorio de Forja</strong> abierta en un PC de la misma WiFi: al pulsar «Ver», Forja le pide a NTR que emita y verás las dos pantallas. Tocar la inferior = táctil.</li>
+                    <li><strong>Mando:</strong> en Luma3DS activa <em>Input Redirection</em> (L+↓+Select → Rosalina). La IP de la 3DS la informa Forja3DS sola (o ponla en la ficha).</li>
+                    <li>Si no hay imagen: comprueba que NTR está activo, que el PC y la 3DS comparten WiFi y que el cortafuegos permite UDP 8001 (Este equipo → botón de cortafuegos).</li>
+                  </ol></details>
+                <ScreenView link={link} kind="3ds" onTouch3ds={hasBridge ? (t => sendPad({ ...lastPad.current, t })) : undefined} />
                 <div>
                   {!hasBridge && (
                     <div className="callout">
