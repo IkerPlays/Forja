@@ -39,11 +39,6 @@ export default function Login() {
     } finally { setBusy(false) }
   }
 
-  async function google() {
-    const { error } = await sb().auth.signInWithOAuth({ provider: 'google', options: { redirectTo: location.origin } })
-    if (error) setMsg({ ok: false, text: error.message.includes('not enabled') ? 'Google no está activado en tu Supabase (Authentication → Providers).' : error.message })
-  }
-
   return (
     <div className="auth-wrap">
       <form className="auth-card" onSubmit={submit}>
@@ -70,8 +65,6 @@ export default function Login() {
           {busy ? <Loader2 size={16} className="spin" /> : mode === 'magic' ? <Mail size={16} /> : <KeyRound size={16} />}
           {mode === 'in' ? 'Entrar' : mode === 'up' ? 'Crear cuenta' : 'Enviarme el enlace'}
         </button>
-        <div className="or"><span>o</span></div>
-        <button className="btn block" type="button" onClick={google}>Continuar con Google</button>
       </form>
     </div>
   )
