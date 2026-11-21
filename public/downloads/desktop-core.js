@@ -376,6 +376,95 @@ var require_pad = __commonJS({
   }
 });
 
+// src/core/ntr.js
+var require_ntr = __commonJS({
+  "src/core/ntr.js"(exports2, module2) {
+    "use strict";
+    var dgram = require("node:dgram");
+    var net = require("node:net");
+    function initPacket({ quality = 80, topPriority = true, priority = 3, qos = 16 } = {}) {
+      const b = Buffer.alloc(84);
+      b.writeUInt32LE(305419896, 0);
+      b.writeUInt32LE(3e3, 4);
+      b.writeUInt32LE(0, 8);
+      b.writeUInt32LE(901, 12);
+      b.writeUInt32LE(((topPriority ? 1 : 0) << 8 | priority % 256) >>> 0, 16);
+      b.writeUInt32LE(quality >>> 0, 20);
+      b.writeUInt32LE(qos * 2 << 16 >>> 0, 24);
+      return b;
+    }
+    var FrameAssembler = class {
+      constructor(onFrame) {
+        this.onFrame = onFrame;
+        this.state = { top: null, bottom: null };
+      }
+      push(data) {
+        if (data.length < 5) return;
+        const frame = data[0], screen = (data[1] & 15) === 1 ? "top" : "bottom", last = (data[1] & 240) >> 4 === 1, pn = data[3];
+        let st = this.state[screen];
+        if (pn === 0) st = this.state[screen] = { frame, next: 0, chunks: [] };
+        if (!st || st.frame !== frame || st.next !== pn) {
+          this.state[screen] = null;
+          return;
+        }
+        st.chunks.push(data.subarray(4));
+        st.next++;
+        if (last) {
+          this.state[screen] = null;
+          this.onFrame(screen, Buffer.concat(st.chunks));
+        }
+      }
+    };
+    var NtrReceiver = class {
+      constructor({ port = 8001, onFrame, onLog = () => {
+      } }) {
+        this.port = port;
+        this.onFrame = onFrame;
+        this.onLog = onLog;
+        this.frames = 0;
+        this.lastFrameAt = 0;
+        this.asm = new FrameAssembler((screen, jpeg) => {
+          this.frames++;
+          this.lastFrameAt = Date.now();
+          this.onFrame(screen, jpeg);
+        });
+        this.sock = dgram.createSocket({ type: "udp4", reuseAddr: true });
+        this.sock.on("message", (m) => this.asm.push(m));
+        this.sock.on("error", (e) => this.onLog("ntr udp: " + e.message));
+        this.sock.bind(port);
+      }
+      stop() {
+        try {
+          this.sock.close();
+        } catch {
+        }
+      }
+    };
+    function startRemotePlay(ip, opts, timeoutMs = 4e3) {
+      return new Promise((resolve) => {
+        const s = net.connect({ host: ip, port: 8e3, timeout: timeoutMs });
+        let done = false;
+        const end = (ok) => {
+          if (done) return;
+          done = true;
+          try {
+            s.destroy();
+          } catch {
+          }
+          resolve(ok);
+        };
+        s.on("connect", () => {
+          s.write(initPacket(opts));
+          setTimeout(() => end(true), 1500);
+        });
+        s.on("timeout", () => end(false));
+        s.on("error", () => end(false));
+      });
+    }
+    module2.exports = { initPacket, FrameAssembler, NtrReceiver, startRemotePlay };
+  }
+});
+
 // src/core/index.js
 module.exports = function start(ctx) {
   const { app, BrowserWindow, Tray, Menu, ipcMain, dialog, session, desktopCapturer, shell, screen, nativeImage, Notification } = ctx.electron;
@@ -387,6 +476,7 @@ module.exports = function start(ctx) {
   const input = require_input();
   const relay = require_relay();
   const { PadSender } = require_pad();
+  const ntr = require_ntr();
   const DEFAULT_WEB_URL = process.env.FORJA_URL || "https://forja-hub.netlify.app";
   const startHidden = process.argv.includes("--hidden");
   if (!app.requestSingleInstanceLock()) {
@@ -587,6 +677,21 @@ module.exports = function start(ctx) {
     if (!padSender) padSender = new PadSender();
     padSender.update(String(ip), port, state);
   });
+  let ntrRx = null;
+  handle("ntr:start", async (ip, opts) => {
+    if (!ntrRx) ntrRx = new ntr.NtrReceiver({ onFrame: (screen2, jpeg) => {
+      if (win && !win.isDestroyed()) win.webContents.send("forja:ntr-frame", screen2, new Uint8Array(jpeg));
+    }, onLog: (m) => console.log(m) });
+    const accepted = await ntr.startRemotePlay(String(ip), opts || {});
+    return { accepted, frames: ntrRx.frames };
+  });
+  handle("ntr:status", () => ({ on: !!ntrRx, frames: ntrRx ? ntrRx.frames : 0, lastFrameAgoMs: ntrRx && ntrRx.lastFrameAt ? Date.now() - ntrRx.lastFrameAt : null }));
+  handle("ntr:stop", () => {
+    if (ntrRx) {
+      ntrRx.stop();
+      ntrRx = null;
+    }
+  });
   const semverGt = (a, b) => {
     const x = String(a).split(".").map(Number), y = String(b).split(".").map(Number);
     for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0);
@@ -659,6 +764,7 @@ module.exports = function start(ctx) {
     quitting = true;
     if (relayHandle) relayHandle.stop();
     if (padSender) padSender.close();
+    if (ntrRx) ntrRx.stop();
   });
   app.on("window-all-closed", () => {
   });
