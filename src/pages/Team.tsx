@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Crown, Loader2, Mail, Shield, Trash2, UserPlus, Users } from 'lucide-react'
+import { Crown, Download, Loader2, Mail, Shield, Trash2, UserPlus, Users } from 'lucide-react'
+import { exportStudio } from '../lib/backup'
 import { sb } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import { useStudio } from '../context/StudioContext'
@@ -149,6 +150,7 @@ export default function Team() {
           <Field label="Nombre del estudio">
             <div className="inline-form"><input value={name} onChange={e => setName(e.target.value)} maxLength={80} /><button className="btn" onClick={rename} type="button">Guardar</button></div>
           </Field>
+          <button className="btn" onClick={async () => { try { await exportStudio(active!.id, active!.name); toast('Copia descargada') } catch (e) { toast(errMsg(e), 'err') } }}><Download size={15} /> Descargar copia de seguridad (JSON)</button>
           {role === 'owner' && <button className="btn danger" onClick={deleteStudio}><Trash2 size={15} /> Eliminar estudio</button>}
         </section>
       )}

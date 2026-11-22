@@ -5,6 +5,7 @@ import { useAuth } from '../context/AuthContext'
 import { useStudio } from '../context/StudioContext'
 import { Avatar, ColorPicker, Field, PageHeader, useToast } from '../components/ui'
 import { COLORS, errMsg, uid } from '../lib/util'
+import { getTheme, setTheme, type ThemePref } from '../lib/theme'
 
 export default function Settings() {
   const { profile, session, refreshProfile, signOut } = useAuth()
@@ -15,6 +16,7 @@ export default function Settings() {
   const [color, setColor] = useState(profile?.color ?? COLORS[4])
   const [busy, setBusy] = useState(false)
   const [studioName, setStudioName] = useState('')
+  const [theme, setThemeSel] = useState<ThemePref>(getTheme())
 
   async function save(e: React.FormEvent) {
     e.preventDefault()
@@ -62,6 +64,12 @@ export default function Settings() {
         <Field label="Correo"><input value={profile?.email ?? ''} disabled /></Field>
         <button className="btn primary" disabled={busy}>{busy && <Loader2 size={14} className="spin" />} Guardar</button>
       </form>
+
+      <section className="panel stack">
+        <h2>Apariencia</h2>
+        <div className="seg">{(['auto', 'dark', 'light'] as ThemePref[]).map(t => <button key={t} className={theme === t ? 'on' : ''} onClick={() => { setTheme(t); setThemeSel(t) }}>{t === 'auto' ? 'Automático' : t === 'dark' ? 'Oscuro' : 'Claro'}</button>)}</div>
+        <p className="muted small">Atajos: <kbd>Ctrl</kbd>+<kbd>K</kbd> o <kbd>/</kbd> abren la búsqueda global desde cualquier pantalla.</p>
+      </section>
 
       {!isMember && (
         <form className="panel stack" onSubmit={createStudio}>

@@ -41,6 +41,13 @@ const relay = require('../src/core/relay')
   const reply = await new Promise(res => { const s = dgram.createSocket('udp4'); s.on('message', m => { s.close(); res(String(m)) }); s.send('FORJA?', 18766, '127.0.0.1') })
   assert.match(reply, /^FORJA http:\/\/.+:18765$/)
   h.stop()
+  // Energía: comandos por sistema (no se ejecutan)
+  const pw = require('../src/core/power')
+  assert.deepEqual(pw.powerCommand('win32', 'lock'), ['rundll32.exe', ['user32.dll,LockWorkStation']])
+  assert.deepEqual(pw.powerCommand('win32', 'shutdown'), ['shutdown', ['/s', '/t', '10']])
+  assert.deepEqual(pw.powerCommand('linux', 'restart'), ['systemctl', ['reboot']]); assert.equal(pw.powerCommand('darwin', 'sleep')[0], 'pmset')
+  assert.throws(() => pw.powerCommand('linux', 'rm -rf /'), /no válida/)
+
   // NTR: reconstrucción de fotogramas JPEG a partir de trozos UDP + paquete de inicio
   const ntr = require('../src/core/ntr')
   const ip = ntr.initPacket({ quality: 80, topPriority: true, priority: 3, qos: 16 })

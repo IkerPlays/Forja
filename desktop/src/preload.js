@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('forjaDesktop', {
   },
   relayStatus: () => inv('relay:status'),
   openFirewall: () => inv('fw:allow'),
+  power: action => inv('power:do', action),
   ntrStart: (ip, opts) => inv('ntr:start', ip, opts),
   ntrStatus: () => inv('ntr:status'),
   ntrStop: () => inv('ntr:stop'),

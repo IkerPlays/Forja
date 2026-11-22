@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Loader2, Mail, Trash2, UserPlus } from 'lucide-react'
+import { Download, Loader2, Mail, Plus, Tag, Trash2, UserPlus } from 'lucide-react'
 import { sb } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import { useStudio } from '../context/StudioContext'
@@ -8,10 +8,11 @@ import { useProjectPeople } from '../lib/people'
 import { profileName } from '../lib/profiles'
 import { Avatar, ColorPicker, Field, Modal, useToast } from './ui'
 import { COLORS, errMsg } from '../lib/util'
+import { exportProject } from '../lib/backup'
 import type { ProjectRole } from '../lib/types'
 
-export default function ProjectSettings({ board, canEdit, onClose, onDeleted }: {
-  board: BoardData; canEdit: boolean; onClose: () => void; onDeleted: () => void
+export default function ProjectSettings({ board, canEdit, upsert, remove, onClose, onDeleted }: {
+  board: BoardData; canEdit: boolean; upsert: (k: any, r: any) => void; remove: (k: any, id: string) => void; onClose: () => void; onDeleted: () => void
 }) {
   const project = board.project!
   const { session } = useAuth()
@@ -69,6 +70,25 @@ export default function ProjectSettings({ board, canEdit, onClose, onDeleted }: 
           </section>
         )}
 
+        {canEdit && (
+          <section className="stack">
+            <h3><Tag size={15} /> Etiquetas</h3>
+            <div className="labels-edit">
+              {board.labels.map(l => (
+                <div key={l.id} className="label-row">
+                  <input type="color" value={l.color} aria-label="Color" onChange={e => { upsert('labels', { ...l, color: e.target.value }); void sb().from('project_labels').update({ color: e.target.value }).eq('id', l.id) }} />
+                  <input defaultValue={l.name} placeholder="Nombre" onBlur={e => { if (e.target.value !== l.name) { upsert('labels', { ...l, name: e.target.value }); void sb().from('project_labels').update({ name: e.target.value }).eq('id', l.id) } }} />
+                  <button className="icon-btn sm" aria-label="Eliminar etiqueta" onClick={async () => { remove('labels', l.id); await sb().from('project_labels').delete().eq('id', l.id) }}><Trash2 size={14} /></button>
+                </div>
+              ))}
+            </div>
+            <button className="btn sm" onClick={async () => {
+              const { data, error } = await sb().from('project_labels').insert({ project_id: project.id, name: 'Nueva', color: COLORS[board.labels.length % COLORS.length] }).select().single()
+              if (error) return toast(errMsg(error), 'err'); upsert('labels', data)
+            }}><Plus size={14} /> Añadir etiqueta</button>
+          </section>
+        )}
+
         <section className="stack">
           <h3>Colaboradores de este proyecto</h3>
           <p className="muted small">
@@ -108,6 +128,10 @@ export default function ProjectSettings({ board, canEdit, onClose, onDeleted }: 
               <button className="btn primary" disabled={busy}>{busy ? <Loader2 size={14} className="spin" /> : <UserPlus size={14} />} Invitar</button>
             </form>
           )}
+        </section>
+
+        <section>
+          <button className="btn" onClick={() => exportProject(board)}><Download size={15} /> Exportar proyecto (JSON)</button>
         </section>
 
         {inStudio && (

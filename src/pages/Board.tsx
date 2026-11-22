@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
   DndContext, DragOverlay, PointerSensor, TouchSensor, useDraggable, useDroppable, useSensor, useSensors,
   closestCorners, type DragEndEvent, type DragStartEvent,
 } from '@dnd-kit/core'
-import { ArrowLeft, MessageSquare, Plus, Users, CalendarDays, CheckSquare, MessageCircle, MoreHorizontal, Check, Settings2, Gamepad2 } from 'lucide-react'
+import { ArrowLeft, MessageSquare, Plus, Users, CalendarDays, CheckSquare, MessageCircle, MoreHorizontal, Check, Settings2, Gamepad2, Search, X } from 'lucide-react'
 import { sb } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import { useBoard } from '../lib/board'
@@ -30,6 +30,10 @@ export default function Board() {
   const [settings, setSettings] = useState(false)
   const [dragging, setDragging] = useState<Card | null>(null)
   const [unread, setUnread] = useState(0)
+  const [fq, setFq] = useState('')
+  const [fLabel, setFLabel] = useState('')
+  const [fMine, setFMine] = useState(false)
+  const [fLate, setFLate] = useState(false)
   const [canEdit, setCanEdit] = useState(true)
   const [gameId, setGameId] = useState<string | null>(null)
   const online = usePresence(projectId, me)
@@ -41,13 +45,21 @@ export default function Board() {
   )
 
   const sortedLists = useMemo(() => [...lists].sort((a, b) => a.position - b.position), [lists])
+  const filtering = !!(fq.trim() || fLabel || fMine || fLate)
+  const matches = useCallback((c: Card) => {
+    if (fq.trim() && !(c.title + ' ' + c.description).toLowerCase().includes(fq.trim().toLowerCase())) return false
+    if (fLabel && !cardLabels.some(cl => cl.card_id === c.id && cl.label_id === fLabel)) return false
+    if (fMine && !assignees.some(a => a.card_id === c.id && a.user_id === me)) return false
+    if (fLate && !(!c.completed && c.due_date && new Date(c.due_date).getTime() < Date.now())) return false
+    return true
+  }, [fq, fLabel, fMine, fLate, cardLabels, assignees, me])
   const byList = useMemo(() => {
     const m = new Map<string, Card[]>()
     for (const l of lists) m.set(l.id, [])
-    for (const c of cards) m.get(c.list_id)?.push(c)
+    for (const c of cards) if (matches(c)) m.get(c.list_id)?.push(c)
     for (const arr of m.values()) arr.sort((a, b) => a.position - b.position)
     return m
-  }, [lists, cards])
+  }, [lists, cards, matches])
 
   // ¿puedo editar? (lector de proyecto = solo comentar/chatear) y ¿hay juego enlazado?
   useEffect(() => {
@@ -165,6 +177,15 @@ export default function Board() {
         <button className="icon-btn" onClick={() => setSettings(true)} aria-label="Ajustes del proyecto"><Settings2 size={18} /></button>
       </div>
 
+      <div className="filter-bar">
+        <div className="search"><Search size={14} /><input value={fq} onChange={e => setFq(e.target.value)} placeholder="Buscar tarjetas…" aria-label="Buscar tarjetas" /></div>
+        <select value={fLabel} onChange={e => setFLabel(e.target.value)} aria-label="Etiqueta"><option value="">Todas las etiquetas</option>{labels.map(l => <option key={l.id} value={l.id}>{l.name || 'Sin nombre'}</option>)}</select>
+        <button className={cn('chip btn-chip', fMine && 'on')} onClick={() => setFMine(v => !v)}>Mis tarjetas</button>
+        <button className={cn('chip btn-chip', fLate && 'on')} onClick={() => setFLate(v => !v)}>Vencidas</button>
+        {filtering && <button className="link-btn" onClick={() => { setFq(''); setFLabel(''); setFMine(false); setFLate(false) }}><X size={12} /> Quitar filtros</button>}
+        {filtering && <small className="muted">{cards.filter(matches).length} de {cards.length} tarjetas</small>}
+      </div>
+
       <div className="board-body">
         <DndContext sensors={sensors} collisionDetection={closestCorners}
           onDragStart={(e: DragStartEvent) => setDragging(cards.find(c => c.id === e.active.id) ?? null)}
@@ -201,7 +222,7 @@ export default function Board() {
       {openCard && cards.find(c => c.id === openCard) && (
         <CardModal board={data} cardId={openCard} canEdit={canEdit} upsert={upsert} remove={remove} onClose={() => setOpenCard(null)} />
       )}
-      {settings && <ProjectSettings board={data} canEdit={canEdit} onClose={() => setSettings(false)} onDeleted={() => nav('/tasks')} />}
+      {settings && <ProjectSettings board={data} canEdit={canEdit} upsert={upsert} remove={remove} onClose={() => setSettings(false)} onDeleted={() => nav('/tasks')} />}
     </div>
   )
 }

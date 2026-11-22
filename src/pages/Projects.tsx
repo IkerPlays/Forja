@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Plus, KanbanSquare, Users, Loader2 } from 'lucide-react'
+import { Plus, KanbanSquare, Users, Loader2, Upload } from 'lucide-react'
 import { sb } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import { useStudio } from '../context/StudioContext'
 import { Empty, Field, Modal, PageHeader, Progress, Spinner, ColorPicker, useToast } from '../components/ui'
 import type { Project, ProjectStats } from '../lib/types'
 import { COLORS, errMsg } from '../lib/util'
+import { parseTrello, type TrelloImport } from '../lib/trello'
+import { importTrello } from '../lib/trelloImport'
 
 export default function Projects() {
   const { session } = useAuth()
@@ -16,6 +18,10 @@ export default function Projects() {
   const [projects, setProjects] = useState<Project[] | null>(null)
   const [stats, setStats] = useState<Record<string, ProjectStats>>({})
   const [creating, setCreating] = useState(false)
+  const [trello, setTrello] = useState<TrelloImport | null>(null)
+  const [importing, setImporting] = useState(false)
+  const [withArchived, setWithArchived] = useState(false)
+  const [rawTrello, setRawTrello] = useState<unknown>(null)
 
   const load = useCallback(async () => {
     const [p, s] = await Promise.all([
@@ -61,7 +67,15 @@ export default function Projects() {
   return (
     <div className="page">
       <PageHeader title="Tareas" sub="Tus proyectos, al estilo Trello, en tiempo real."
-        actions={isMember && <button className="btn primary" onClick={() => setCreating(true)}><Plus size={16} /> Nuevo proyecto</button>} />
+        actions={isMember && <>
+          <label className="btn"><Upload size={16} /> Importar de Trello
+            <input type="file" accept=".json,application/json" hidden onChange={async e => {
+              const f = e.target.files?.[0]; e.target.value = ''
+              if (!f) return
+              try { const raw = JSON.parse(await f.text()); setRawTrello(raw); setTrello(parseTrello(raw)); setWithArchived(false) } catch (er) { toast(errMsg(er), 'err') }
+            }} /></label>
+          <button className="btn primary" onClick={() => setCreating(true)}><Plus size={16} /> Nuevo proyecto</button>
+        </>} />
 
       {isMember && (own.length ? <div className="grid">{own.map(card)}</div> : (
         <Empty icon={<KanbanSquare size={28} />} title="Aún no tienes proyectos"
@@ -76,6 +90,22 @@ export default function Projects() {
         </>
       )}
 
+      {trello && active && (
+        <Modal title="Importar de Trello" onClose={() => setTrello(null)}>
+          <div className="stack">
+            <p><strong>{trello.name}</strong></p>
+            <p className="muted small">{trello.lists.length} listas · {trello.cards.length} tarjetas · {trello.labels.length} etiquetas · {trello.cards.reduce((n, c) => n + c.checklist.length, 0)} elementos de checklist.
+              {(trello.skipped.lists || trello.skipped.cards) ? ` Se omiten ${trello.skipped.lists} listas y ${trello.skipped.cards} tarjetas archivadas.` : ''}</p>
+            <label className="row" style={{ gap: 6 }}><input type="checkbox" checked={withArchived} onChange={e => { setWithArchived(e.target.checked); try { setTrello(parseTrello(rawTrello, e.target.checked)) } catch { /* noop */ } }} /> Incluir archivadas</label>
+            <p className="muted small">Se importan listas, tarjetas, descripciones, fechas, etiquetas y checklists. En Trello: menú del tablero → Imprimir y exportar → Exportar como JSON.</p>
+            <button className="btn primary" disabled={importing} onClick={async () => {
+              setImporting(true)
+              try { const id = await importTrello(trello, active.id, session!.user.id, COLORS[4]); toast('Tablero importado'); setTrello(null); nav(`/tasks/${id}`) }
+              catch (er) { toast(errMsg(er), 'err') } finally { setImporting(false) }
+            }}>{importing && <Loader2 size={14} className="spin" />} Importar</button>
+          </div>
+        </Modal>
+      )}
       {creating && active && (
         <CreateProject studioId={active.id} userId={session!.user.id} onClose={() => setCreating(false)}
           onCreated={id => { toast('Proyecto creado'); nav(`/tasks/${id}`) }} />

@@ -6,6 +6,7 @@ import type { BoardData } from '../lib/board'
 import { useProjectPeople } from '../lib/people'
 import { profileName, useProfiles } from '../lib/profiles'
 import { Avatar, Modal, useToast } from './ui'
+import { Markdown } from '../lib/markdown'
 import { cn, errMsg, fromInputDate, timeAgo, toInputDate, posBetween } from '../lib/util'
 
 interface Props {
@@ -24,6 +25,7 @@ export default function CardModal({ board, cardId, canEdit, upsert, remove, onCl
   const [title, setTitle] = useState(card.title)
   const [desc, setDesc] = useState(card.description)
   const [picker, setPicker] = useState<null | 'people' | 'labels'>(null)
+  const [editDesc, setEditDesc] = useState(!card.description)
   const [newItem, setNewItem] = useState('')
   const [comment, setComment] = useState('')
   const commentsEnd = useRef<HTMLDivElement>(null)
@@ -127,9 +129,11 @@ export default function CardModal({ board, cardId, canEdit, upsert, remove, onCl
             {card.due_date && <span className={cn('chip', !card.completed && new Date(card.due_date) < new Date() && 'overdue')}><CalendarDays size={13} /> {new Date(card.due_date).toLocaleDateString('es')}</span>}
           </div>
 
-          <h4>Descripción</h4>
-          <textarea className="desc" rows={5} value={desc} disabled={!canEdit} placeholder="Añade detalles, enlaces, notas…"
-            onChange={e => setDesc(e.target.value)} onBlur={() => { if (desc !== card.description) void patch({ description: desc }) }} />
+          <h4>Descripción {canEdit && desc && <button className="link-btn" onClick={() => setEditDesc(v => !v)}>{editDesc ? 'ver' : 'editar'}</button>}</h4>
+          {editDesc || !desc ? (
+            <textarea className="desc" rows={5} value={desc} disabled={!canEdit} placeholder="Añade detalles, enlaces, notas… (admite Markdown: **negrita**, listas, - [ ] casillas, `código`)"
+              onChange={e => setDesc(e.target.value)} onBlur={() => { if (desc !== card.description) void patch({ description: desc }); if (desc) setEditDesc(false) }} />
+          ) : <div className="desc-view" onDoubleClick={() => canEdit && setEditDesc(true)}><Markdown text={desc} /></div>}
 
           <h4><CheckSquare size={15} /> Lista de comprobación {items.length > 0 && <small className="muted">{doneCount}/{items.length}</small>}</h4>
           {items.length > 0 && <div className="progress"><div style={{ width: `${(doneCount / items.length) * 100}%` }} /></div>}
@@ -157,7 +161,7 @@ export default function CardModal({ board, cardId, canEdit, upsert, remove, onCl
                   <div className="comment-head"><strong>{profileName(profile(c.user_id))}</strong> <small className="muted">{timeAgo(c.created_at)}</small>
                     {(c.user_id === me || canEdit) && <button className="link-btn" onClick={() => deleteComment(c.id)}>borrar</button>}
                   </div>
-                  <p>{c.body}</p>
+                  <Markdown text={c.body} className="inline-md" />
                 </div>
               </div>
             ))}

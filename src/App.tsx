@@ -12,6 +12,7 @@ import Onboarding from './pages/Onboarding'
 import Dashboard from './pages/Dashboard'
 import Projects from './pages/Projects'
 import Settings from './pages/Settings'
+import { startNotifications } from './lib/notify'
 
 // Las pantallas pesadas se cargan solo cuando se abren
 const Board = lazy(() => import('./pages/Board'))
@@ -21,12 +22,15 @@ const GameDetail = lazy(() => import('./pages/GameDetail'))
 const PcDevices = lazy(() => import('./pages/PcDevices'))
 const Team = lazy(() => import('./pages/Team'))
 const Connect = lazy(() => import('./pages/Connect'))
+const CalendarPage = lazy(() => import('./pages/Calendar'))
+const Notes = lazy(() => import('./pages/Notes'))
 const ThisPc = lazy(() => import('./pages/ThisPc'))
 
 function Gate() {
   const { session, profile, loading } = useAuth()
   const { loading: studioLoading, isMember } = useStudio()
   const [needsOnboarding, setNeeds] = useOnboarding(isMember)
+  useEffect(() => { if (!session) return; return startNotifications(session.user.id) }, [session?.user.id])  // eslint-disable-line react-hooks/exhaustive-deps
 
   if (loading) return <Spinner label="Cargando…" />
   if (!session) return <Login />
@@ -42,6 +46,7 @@ function Gate() {
           <Route index element={isMember ? <Dashboard /> : <Navigate to="/tasks" replace />} />
           <Route path="tasks" element={<Projects />} />
           <Route path="tasks/:projectId" element={<Board />} />
+          <Route path="calendar" element={<CalendarPage />} />
           <Route path="settings" element={<Settings />} />
           {isMember && (
             <>
@@ -52,6 +57,7 @@ function Gate() {
               <Route path="games/pc/:deviceId" element={<PcDevices />} />
               <Route path="games/:gameId" element={<GameDetail />} />
               <Route path="team" element={<Team />} />
+              <Route path="notes" element={<Notes />} />
               <Route path="connect" element={<Connect />} />
               <Route path="this-pc" element={<ThisPc />} />
             </>

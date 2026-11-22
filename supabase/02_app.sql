@@ -221,6 +221,21 @@ create table if not exists public.device_pairings (
 );
 create index if not exists device_pairings_user_idx on public.device_pairings (user_id);
 
+
+-- Notas del estudio (Markdown)
+create table if not exists public.notes (
+  id         uuid primary key default gen_random_uuid(),
+  studio_id  uuid not null references public.studios(id) on delete cascade,
+  title      text not null default 'Nueva nota' check (char_length(title) <= 200),
+  body       text not null default '' check (char_length(body) <= 200000),
+  pinned     boolean not null default false,
+  created_by uuid references public.profiles(id) on delete set null,
+  updated_by uuid references public.profiles(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists notes_studio_idx on public.notes (studio_id, updated_at desc);
+
 -- Juegos del estudio
 create table if not exists public.games (
   id          uuid primary key default gen_random_uuid(),
@@ -335,6 +350,9 @@ create trigger projects_updated_at before update on public.projects
   for each row execute function public.set_updated_at();
 drop trigger if exists cards_updated_at on public.cards;
 create trigger cards_updated_at before update on public.cards
+  for each row execute function public.set_updated_at();
+drop trigger if exists notes_updated_at on public.notes;
+create trigger notes_updated_at before update on public.notes
   for each row execute function public.set_updated_at();
 drop trigger if exists games_updated_at on public.games;
 create trigger games_updated_at before update on public.games
@@ -716,7 +734,7 @@ begin
   foreach t in array array[
     'studios','studio_members','studio_invites','projects','project_members','project_invites',
     'lists','cards','project_labels','card_labels','card_assignees','card_checklist','card_comments',
-    'project_messages','activity','devices','device_commands','games','device_links','device_pairings'
+    'project_messages','activity','devices','device_commands','games','device_links','device_pairings','notes'
   ] loop
     execute format('alter table public.%I enable row level security', t);
   end loop;
@@ -880,6 +898,17 @@ drop policy if exists "device_links: borrar" on public.device_links;
 create policy "device_links: borrar" on public.device_links for delete to authenticated
   using (exists (select 1 from public.devices d where d.id = device_id and public.is_studio_member(d.studio_id)));
 
+
+-- Notas: miembros del estudio
+drop policy if exists "notes: ver" on public.notes;
+create policy "notes: ver" on public.notes for select to authenticated using (public.is_studio_member(studio_id));
+drop policy if exists "notes: crear" on public.notes;
+create policy "notes: crear" on public.notes for insert to authenticated with check (public.is_studio_member(studio_id) and created_by = auth.uid());
+drop policy if exists "notes: editar" on public.notes;
+create policy "notes: editar" on public.notes for update to authenticated using (public.is_studio_member(studio_id)) with check (public.is_studio_member(studio_id));
+drop policy if exists "notes: borrar" on public.notes;
+create policy "notes: borrar" on public.notes for delete to authenticated using (public.is_studio_member(studio_id));
+
 -- Permisos de las funciones: nada para anónimos
 do $$
 declare f text;
@@ -905,7 +934,7 @@ declare t text;
 begin
   foreach t in array array[
     'lists','cards','project_labels','card_labels','card_assignees','card_checklist','card_comments',
-    'project_messages','activity','projects','project_members','studio_members','games','devices','device_commands'
+    'project_messages','activity','projects','project_members','studio_members','games','devices','device_commands','notes'
   ] loop
     if not exists (select 1 from pg_publication_tables
                    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = t) then

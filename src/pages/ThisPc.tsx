@@ -91,6 +91,12 @@ export default function ThisPc() {
       </section>
 
       <section className="panel stack">
+        <h2><Power size={17} /> Energía</h2>
+        <Toggle on={s.allowPower} onChange={v => set({ allowPower: v })} label="Permitir bloquear, suspender, reiniciar y apagar" danger={s.allowPower}
+          hint={s.allowPower ? 'Activado: los miembros del estudio pueden apagar o reiniciar este PC desde Forja (con confirmación).' : 'Desactivado (recomendado). Actívalo solo si quieres gestionar el PC a distancia.'} />
+      </section>
+
+      <section className="panel stack">
         <h2><Radio size={17} /> Puente para la 3DS</h2>
         <Toggle on={s.relay} onChange={v => set({ relay: v })} label="Puente local para la 3DS"
           hint="Si la consola no consigue conectarse a internet por HTTPS, se conecta a este PC por tu WiFi y este PC hace de intermediario. La consola lo encuentra sola." />

@@ -18,6 +18,10 @@ export class DesktopPcAgent extends CommandAgent {
     }
   }
 
+  async do_power(c: Cmd) {
+    if (!['lock', 'sleep', 'restart', 'shutdown'].includes(String(c.kind))) throw new Error('Acción no válida')
+    await desktop!.power(c.kind as 'lock' | 'sleep' | 'restart' | 'shutdown'); return {}
+  }
   async do_list_dir(c: Cmd) { return desktop!.fs.list(c.path || '/') }
   async do_mkdir(c: Cmd) { await desktop!.fs.mkdir(c.path || '/'); return {} }
   async do_rename(c: Cmd) { await desktop!.fs.rename(c.path || '/', c.to || '/'); return {} }

@@ -25,6 +25,7 @@ export default function Dashboard() {
   const [devices, setDevices] = useState<Device[]>([])
   const [games, setGames] = useState<Game[]>([])
   const [counts, setCounts] = useState({ projects: 0, open: 0, overdue: 0 })
+  const [week, setWeek] = useState<number[]>([])
   const profileOf = useProfiles(acts.map(a => a.user_id))
 
   useEffect(() => {
@@ -44,7 +45,12 @@ export default function Dashboard() {
       const cards = ids.length
         ? await sb().from('cards').select('*, projects(id,name,color)').in('id', ids).eq('completed', false).order('due_date', { ascending: true, nullsFirst: false }).limit(10)
         : { data: [] }
+      const since = new Date(Date.now() - 13 * 86_400_000); since.setHours(0, 0, 0, 0)
+      const done = await sb().from('cards').select('completed_at').eq('completed', true).gte('completed_at', since.toISOString()).limit(2000)
+      const days = Array.from({ length: 14 }, () => 0)
+      for (const r of (done.data ?? []) as { completed_at: string }[]) { const i = Math.floor((new Date(r.completed_at).getTime() - since.getTime()) / 86_400_000); if (i >= 0 && i < 14) days[i]++ }
       if (!alive) return
+      setWeek(days)
       setMine((cards.data ?? []) as unknown as MyCard[])
       setActs((ac.data ?? []) as Activity[]); setDevices((dv.data ?? []) as Device[]); setGames((gm.data ?? []) as Game[])
       setCounts({
@@ -104,6 +110,15 @@ export default function Dashboard() {
             ))}
             {!acts.length && <li className="muted">Todavía no hay actividad.</li>}
           </ul>
+        </section>
+
+        <section className="panel">
+          <h2>Tareas completadas · 14 días</h2>
+          {week.some(n => n) ? (
+            <div className="chart" role="img" aria-label="Tareas completadas por día">
+              {week.map((n, i) => { const max = Math.max(...week, 1); const d = new Date(Date.now() - (13 - i) * 86_400_000); return <div key={i} title={`${d.toLocaleDateString('es')}: ${n}`}><span>{n || ''}</span><i style={{ height: `${Math.max(4, (n / max) * 70)}%` }} /></div> })}
+            </div>
+          ) : <p className="muted small">Cuando completes tarjetas verás aquí tu ritmo.</p>}
         </section>
 
         <section className="panel">

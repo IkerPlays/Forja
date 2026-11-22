@@ -2,13 +2,13 @@
 export interface DesktopSettings {
   webUrl: string; roots: string[]; fullAccess: boolean; allowInput: boolean; allowScreen: boolean
   relay: boolean; autostart: boolean; hostId: string; deviceId?: string
-  shareCamera: boolean; shareMic: boolean; screenQuality: 'fluid' | 'native'
+  shareCamera: boolean; shareMic: boolean; allowPower: boolean; screenQuality: 'fluid' | 'native'
 }
 export interface ForjaDesktop {
   isDesktop: true
   info(): Promise<{ hostname: string; platform: string; version: string; shellVersion?: string; hostId: string; input: boolean; lan: string[] }>
   getSettings(): Promise<DesktopSettings>
-  setSettings(patch: Partial<Pick<DesktopSettings, 'fullAccess' | 'allowInput' | 'allowScreen' | 'relay' | 'autostart' | 'deviceId' | 'shareCamera' | 'shareMic' | 'screenQuality'>>): Promise<DesktopSettings>
+  setSettings(patch: Partial<Pick<DesktopSettings, 'fullAccess' | 'allowInput' | 'allowScreen' | 'relay' | 'autostart' | 'deviceId' | 'shareCamera' | 'shareMic' | 'allowPower' | 'screenQuality'>>): Promise<DesktopSettings>
   pickRoot(): Promise<DesktopSettings>
   removeRoot(p: string): Promise<DesktopSettings>
   fs: {
@@ -22,6 +22,7 @@ export interface ForjaDesktop {
   }
   relayStatus(): Promise<{ on: boolean; addresses: string[]; requests: number; error?: string }>
   openFirewall(): Promise<boolean>
+  power(action: 'lock' | 'sleep' | 'restart' | 'shutdown'): Promise<void>
   ntrStart(ip: string, opts?: { quality?: number; topPriority?: boolean; priority?: number; qos?: number }): Promise<{ accepted: boolean; frames: number }>
   ntrStatus(): Promise<{ on: boolean; frames: number; lastFrameAgoMs: number | null }>
   ntrStop(): Promise<void>

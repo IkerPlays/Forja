@@ -10,6 +10,17 @@ El hub personal de tu estudio, para la **tablet** y el **PC**. Un solo sitio par
 | **Juegos** | Biblioteca del estudio con estado, plataforma, portada y versión. Se **sincroniza con Tareas** (un clic crea el tablero del juego y su progreso se ve en la ficha) y con tu **PC**: explora sus carpetas, importa carpetas como juegos, mira su pantalla en directo y controla ratón y teclado. |
 | **Equipo** | Cuentas que gestionan **todo el estudio** (propietario / administrador / miembro). Distinto de los colaboradores de Tareas, que solo ven un proyecto. |
 
+### Más funciones
+* **Búsqueda global** (`Ctrl/⌘+K` o `/`): páginas, proyectos, tarjetas, juegos y dispositivos.
+* **Calendario** con las fechas límite de todos tus proyectos y **Mis tareas** por urgencia (vencidas / hoy / semana).
+* **Tablero**: búsqueda y filtros (etiqueta, mis tarjetas, vencidas), **gestor de etiquetas**, descripciones y comentarios en **Markdown**.
+* **Notas** del estudio en Markdown, en tiempo real.
+* **Importar de Trello** (JSON), exportar un proyecto y **copia de seguridad** del estudio.
+* **Notificaciones**: tareas que te asignan, comentarios en tus tarjetas y mensajes del chat (también avisos del sistema).
+* **Pantalla remota**: captura de pantalla y grabación en WebM; pantalla + cámara + micrófono; 3DS por NTR con táctil.
+* **PC**: bloquear, suspender, reiniciar y apagar a distancia (opcional, desactivado por defecto).
+* Tema **automático / claro / oscuro** y gráfico de tareas completadas.
+
 ## Cómo está montado
 
 ```
@@ -34,6 +45,7 @@ Sigue **[docs/CONFIGURACION.md](docs/CONFIGURACION.md)** (Supabase → Netlify �
 npm install
 npm run dev        # http://localhost:5173
 npm run build
+npm test                              # lógica pura (Markdown, Trello)
 cd desktop && npm install && npm run selftest
 ```
 

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { ChevronDown, Activity, FolderOpen, Gamepad2, MonitorPlay, Settings2, Terminal, Trash2, Copy, Download } from 'lucide-react'
+import { Power, ChevronDown, Activity, FolderOpen, Gamepad2, MonitorPlay, Settings2, Terminal, Trash2, Copy, Download } from 'lucide-react'
 import { sb, readConfig } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import PcFolderPanel from './PcFolderPanel'
@@ -31,6 +31,7 @@ export default function DeviceConsole({ device, onChanged, onDeleted, startPath,
   const isLocal = isDesktop && host.deviceId === device.id   // el PC en el que estás ahora mismo
   const [tab, setTab] = useState<Tab>(startPath || isLocal ? 'files' : is3ds ? 'play' : 'screen')
   const [editing, setEditing] = useState(false)
+  const [power, setPower] = useState(false)
   const [help, setHelp] = useState(false)
 
   const client = useMemo(() => new CommandClient(device.id), [device.id])
@@ -99,6 +100,22 @@ export default function DeviceConsole({ device, onChanged, onDeleted, startPath,
           </small>
         </div>
         {!online && is3ds && <button className="btn sm" onClick={() => setHelp(true)}><Terminal size={14} /> ¿Cómo conecto la 3DS?</button>}
+        {online && !is3ds && !isLocal && (
+          <div className="menu-wrap">
+            <button className="btn sm" onClick={() => setPower(p => !p)}><Power size={14} /> Energía</button>
+            {power && (
+              <div className="menu right" onMouseLeave={() => setPower(false)}>
+                {([['lock', 'Bloquear sesión'], ['sleep', 'Suspender'], ['restart', 'Reiniciar'], ['shutdown', 'Apagar']] as const).map(([a, label]) => (
+                  <button key={a} className={a === 'restart' || a === 'shutdown' ? 'danger' : ''} onClick={async () => {
+                    setPower(false)
+                    if (!confirm(`¿${label} «${device.name}»?`)) return
+                    try { await client.run('power', { type: a }, 30_000); toast(`${label}: orden enviada`) } catch (e) { toast(errMsg(e), 'err') }
+                  }}>{label}</button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
         {!online && !is3ds && <RouterLink className="btn sm" to="/connect"><Terminal size={14} /> ¿Cómo conecto este PC?</RouterLink>}
       </div>
 

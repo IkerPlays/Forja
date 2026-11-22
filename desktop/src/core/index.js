@@ -11,6 +11,7 @@ const input = require('./input')
 const relay = require('./relay')
 const { PadSender } = require('./pad')
 const ntr = require('./ntr')
+const power = require('./power')
 
 const DEFAULT_WEB_URL = process.env.FORJA_URL || 'https://forja-hub.netlify.app'
 const startHidden = process.argv.includes('--hidden')
@@ -19,7 +20,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); process.exit(0) }
 
 /* ---------------- Ajustes (userData/forja-desktop.json) ---------------- */
 const settingsFile = () => path.join(app.getPath('userData'), 'forja-desktop.json')
-let settings = { webUrl: DEFAULT_WEB_URL, roots: [], fullAccess: true, allowInput: true, allowScreen: true, shareCamera: false, shareMic: false, screenQuality: 'fluid', deviceId: '', relay: true, autostart: false, hostId: '' }
+let settings = { webUrl: DEFAULT_WEB_URL, roots: [], fullAccess: true, allowInput: true, allowScreen: true, shareCamera: false, shareMic: false, allowPower: false, screenQuality: 'fluid', deviceId: '', relay: true, autostart: false, hostId: '' }
 function loadSettings() {
   let first = false
   try { settings = { ...settings, ...JSON.parse(fs.readFileSync(settingsFile(), 'utf8')) } } catch { first = true }
@@ -98,7 +99,7 @@ handle('info', () => ({
 }))
 handle('settings:get', () => safeSettings())
 handle('settings:set', async patch => {
-  for (const k of ['fullAccess', 'allowInput', 'allowScreen', 'shareCamera', 'shareMic', 'relay', 'autostart']) if (k in patch) settings[k] = !!patch[k]
+  for (const k of ['fullAccess', 'allowInput', 'allowScreen', 'shareCamera', 'shareMic', 'allowPower', 'relay', 'autostart']) if (k in patch) settings[k] = !!patch[k]
   if (typeof patch.deviceId === 'string') settings.deviceId = patch.deviceId
   if (patch.screenQuality === 'fluid' || patch.screenQuality === 'native') settings.screenQuality = patch.screenQuality
   saveSettings()
@@ -142,6 +143,12 @@ const bounds = () => {
 ipcMain.on('forja:input:mouse', (_e, m) => { if (settings.allowInput) void input.mouse(m, bounds()) })
 ipcMain.on('forja:input:key', (_e, m) => { if (settings.allowInput) void input.key(m) })
 ipcMain.on('forja:pad', (_e, ip, port, state) => { if (!padSender) padSender = new PadSender(); padSender.update(String(ip), port, state) })
+
+/* ---------------- Energía ---------------- */
+handle('power:do', async action => {
+  if (!settings.allowPower) throw new Error('Desactivado en este PC (Forja de escritorio → Este equipo → Permitir bloquear/suspender/apagar)')
+  await power.runPower(action)
+})
 
 /* ---------------- Pantalla de la 3DS (NTR / NTR-HR) ---------------- */
 let ntrRx = null

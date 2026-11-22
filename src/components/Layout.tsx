@@ -1,5 +1,8 @@
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
-import { Home, KanbanSquare, Gamepad2, Users, Settings as Cog, Tablet, LogOut, ChevronsUpDown, Check, Plug, Monitor } from 'lucide-react'
+import { Home, KanbanSquare, Gamepad2, Users, Settings as Cog, Tablet, LogOut, ChevronsUpDown, Check, Plug, Monitor, CalendarDays, FileText, Search, Sun, Moon, SunMoon } from 'lucide-react'
+import NotificationBell from './NotificationBell'
+import CommandPalette from './CommandPalette'
+import { getTheme, setTheme, type ThemePref } from '../lib/theme'
 import { isDesktop } from '../lib/native'
 import { useState } from 'react'
 import { useAuth } from '../context/AuthContext'
@@ -11,11 +14,15 @@ export default function Layout() {
   const { profile, signOut } = useAuth()
   const { studios, active, setActive, isMember } = useStudio()
   const [menu, setMenu] = useState(false)
+  const [theme, setThemeState] = useState<ThemePref>(getTheme())
+  const cycle = () => { const n: ThemePref = theme === 'auto' ? 'dark' : theme === 'dark' ? 'light' : 'auto'; setTheme(n); setThemeState(n) }
   const loc = useLocation()
 
   const items = [
     { to: '/', label: 'Inicio', icon: Home, end: true, studio: true },
     { to: '/tasks', label: 'Tareas', icon: KanbanSquare },
+    { to: '/calendar', label: 'Calendario', icon: CalendarDays },
+    { to: '/notes', label: 'Notas', icon: FileText, studio: true },
     { to: '/3ds', label: '3DS', icon: Tablet, studio: true },
     { to: '/games', label: 'Juegos', icon: Gamepad2, studio: true },
     { to: '/team', label: 'Equipo', icon: Users, studio: true },
@@ -30,7 +37,12 @@ export default function Layout() {
         <div className="brand">
           <img src="/favicon.svg" alt="" width={28} height={28} />
           <span>Forja</span>
+          <span className="spacer" />
+          <NotificationBell />
         </div>
+        <button className="search-btn" onClick={() => window.dispatchEvent(new Event('forja:palette'))} aria-label="Buscar">
+          <Search size={15} /><span>Buscar…</span><kbd>Ctrl K</kbd>
+        </button>
 
         {isMember && active && (
           <div className="studio-switch">
@@ -67,12 +79,14 @@ export default function Layout() {
             <strong>{profile?.display_name || 'Tú'}</strong>
             <small className="muted">{profile?.email}</small>
           </div>
+          <button className="icon-btn" onClick={cycle} title={`Tema: ${theme === 'auto' ? 'automático' : theme === 'dark' ? 'oscuro' : 'claro'}`} aria-label="Cambiar tema">{theme === 'auto' ? <SunMoon size={17} /> : theme === 'dark' ? <Moon size={17} /> : <Sun size={17} />}</button>
           <button className="icon-btn" onClick={() => void signOut()} title="Cerrar sesión" aria-label="Cerrar sesión">
             <LogOut size={17} />
           </button>
         </div>
       </aside>
       <main className="main"><Outlet /></main>
+      <CommandPalette />
     </div>
   )
 }

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Cast, Maximize, MonitorUp, Video, VideoOff, MousePointer2, Keyboard, KeyboardIcon, Camera, Mic } from 'lucide-react'
+import { Camera as CamIcon, Circle, Square, Cast, Maximize, MonitorUp, Video, VideoOff, MousePointer2, Keyboard, KeyboardIcon, Camera, Mic } from 'lucide-react'
 import { Link, ScreenSharer, ScreenViewer, SCREEN_CONSTRAINTS, tuneForMotion, type Sources, type ViewerStreams } from '../lib/devices'
 import { errMsg } from '../lib/util'
 import { touchFromComposite } from '../lib/ntrSource'
@@ -33,6 +33,7 @@ export default function ScreenView({ link, kind, remoteControl, onTouch3ds }: { 
   const lastScrollY = useRef(0)
   const kb = useRef<HTMLInputElement>(null)
   const ime = useRef(false)
+  const [rec, setRec] = useState<MediaRecorder | null>(null)
 
   // Espectador
   useEffect(() => {
@@ -174,6 +175,30 @@ export default function ScreenView({ link, kind, remoteControl, onTouch3ds }: { 
   }
 
   const hasMedia = !!mainStream
+  const stamp = () => new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+  const save = (b: Blob, name: string) => { const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 30_000) }
+  function snapshot() {
+    const v = video.current
+    if (!v || !v.videoWidth) return toast('Aún no hay imagen', 'err')
+    const c = document.createElement('canvas'); c.width = v.videoWidth; c.height = v.videoHeight
+    c.getContext('2d')!.drawImage(v, 0, 0)
+    c.toBlob(b => { if (b) { save(b, `forja-captura-${stamp()}.png`); toast('Captura guardada') } }, 'image/png')
+  }
+  function toggleRec() {
+    if (rec) { rec.stop(); return }
+    if (!mainStream) return
+    const tracks = [...mainStream.getTracks()]
+    if (shown?.camera) for (const t of shown.camera.getAudioTracks()) if (!tracks.includes(t)) tracks.push(t)
+    const mime = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'].find(m => MediaRecorder.isTypeSupported(m))
+    try {
+      const r = new MediaRecorder(new MediaStream(tracks), { mimeType: mime, videoBitsPerSecond: 8_000_000 })
+      const chunks: Blob[] = []
+      r.ondataavailable = e => { if (e.data.size) chunks.push(e.data) }
+      r.onstop = () => { save(new Blob(chunks, { type: 'video/webm' }), `forja-grabacion-${stamp()}.webm`); setRec(null); toast('Grabación guardada') }
+      r.start(1000); setRec(r)
+    } catch (e) { toast(errMsg(e), 'err') }
+  }
+  useEffect(() => { if (!hasMedia && rec) rec.stop() }, [hasMedia])  // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <div className="screen">
       <div className="screen-bar">
@@ -187,6 +212,8 @@ export default function ScreenView({ link, kind, remoteControl, onTouch3ds }: { 
             {remoteControl && <button className={`btn sm ${control ? 'primary' : ''}`} onClick={() => setControl(c => !c)}>
               <MousePointer2 size={14} /> Control {control ? 'activado' : 'desactivado'}</button>}
             {remoteControl && control && <button className="btn sm" onClick={() => kb.current?.focus()}><KeyboardIcon size={14} /> Teclado</button>}
+            <button className="btn sm" onClick={snapshot} title="Guardar una captura"><CamIcon size={14} /> Captura</button>
+            <button className={`btn sm ${rec ? 'danger' : ''}`} onClick={toggleRec} title="Grabar el vídeo (WebM)">{rec ? <><Square size={13} /> Parar</> : <><Circle size={13} /> Grabar</>}</button>
             <button className="btn sm" onClick={() => wrap.current?.requestFullscreen?.()}><Maximize size={14} /> Pantalla completa</button>
           </>
         )}
@@ -242,6 +269,7 @@ export default function ScreenView({ link, kind, remoteControl, onTouch3ds }: { 
             else if (ev.inputType === 'insertLineBreak' || ev.inputType === 'insertParagraph') tap('Enter')
             else if (ev.data) for (const ch of ev.data) typeChar(ch)
           }} />
+        {rec && <div className="video-flag rec"><span className="rec-dot" /> Grabando</div>}
         {control && <div className="video-flag"><Keyboard size={13} /> Teclado y ratón enviados al PC</div>}
       </div>
     </div>

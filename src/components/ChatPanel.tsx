@@ -5,6 +5,7 @@ import { useAuth } from '../context/AuthContext'
 import { profileName, useProfiles } from '../lib/profiles'
 import { Avatar, useToast } from './ui'
 import { cn, errMsg, timeAgo } from '../lib/util'
+import { Markdown } from '../lib/markdown'
 import type { Message } from '../lib/types'
 
 export default function ChatPanel({ projectId, messages, upsert, onClose }: {
@@ -41,7 +42,7 @@ export default function ChatPanel({ projectId, messages, upsert, onClose }: {
           return (
             <div key={m.id} className={cn('msg', mine && 'mine')}>
               {showHead && !mine && <div className="msg-head"><Avatar profile={profile(m.user_id)} size={20} /> <strong>{profileName(profile(m.user_id))}</strong> <small className="muted">{timeAgo(m.created_at)}</small></div>}
-              <div className="bubble">{m.body}</div>
+              <div className="bubble"><Markdown text={m.body} className="inline-md" /></div>
             </div>
           )
         })}
