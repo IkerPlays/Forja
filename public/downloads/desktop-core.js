@@ -310,24 +310,31 @@ var require_pad = __commonJS({
     "use strict";
     var dgram = require("node:dgram");
     var clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+    var CPAD_BOUND = 1488;
+    var CPP_BOUND = 127;
     function buildPacket(s) {
       let hid = 4095;
       for (let i = 0; i < 12; i++) if (s.b & 1 << i) hid &= ~(1 << i);
       let touch = 33554432;
       if (s.t) {
-        const x = clamp(Math.round(s.t[0] * 4095), 0, 4095);
-        const y = clamp(Math.round(s.t[1] * 4095), 0, 4095);
+        const x = clamp(Math.floor(4095 * clamp(s.t[0], 0, 1)), 0, 4095);
+        const y = clamp(Math.floor(4095 * clamp(s.t[1], 0, 1)), 0, 4095);
         touch = (1 << 24 | y << 12 | x) >>> 0;
       }
-      const c = (v) => clamp(Math.round(2047 + v * 2047), 0, 4095);
-      const circle = (c(s.cy) << 12 | c(s.cx)) >>> 0;
+      let circle = 8386559;
+      if (s.cx || s.cy) {
+        const x = clamp(Math.floor(s.cx * CPAD_BOUND + 2048), 0, 4095);
+        const y = clamp(Math.floor(s.cy * CPAD_BOUND + 2048), 0, 4095);
+        circle = (y << 12 | x) >>> 0;
+      }
       let cstick = 2155872385;
       const zl = (s.b & 1 << 14) !== 0, zr = (s.b & 1 << 15) !== 0;
       if (s.sx || s.sy || zl || zr) {
-        const sx = clamp(Math.round(128 + s.sx * 127), 1, 255), sy = clamp(Math.round(128 + s.sy * 127), 1, 255);
-        cstick = (sy << 24 | sx << 16 | 129) >>> 0;
-        if (zl) cstick = (cstick & ~128) >>> 0;
-        if (zr) cstick = (cstick & ~1) >>> 0;
+        const rx = s.sx, ry = s.sy;
+        const x = clamp(Math.floor(Math.SQRT1_2 * (rx + ry) * CPP_BOUND + 128), 0, 255);
+        const y = clamp(Math.floor(Math.SQRT1_2 * (ry - rx) * CPP_BOUND + 128), 0, 255);
+        const ir = (zr ? 1 << 1 : 0) | (zl ? 1 << 2 : 0);
+        cstick = (y << 24 | x << 16 | ir << 8 | 129) >>> 0;
       }
       const buf = Buffer.alloc(20);
       buf.writeUInt32LE(hid >>> 0, 0);
@@ -341,23 +348,36 @@ var require_pad = __commonJS({
     var PadSender = class {
       constructor() {
         this.sock = dgram.createSocket("udp4");
-        this.sock.on("error", () => {
+        this.sock.on("error", (e) => {
+          this.lastError = e.message;
         });
         this.state = null;
         this.timer = null;
         this.target = null;
         this.idleSince = 0;
+        this.lastUpdate = 0;
+        this.sent = 0;
+        this.lastError = "";
       }
       update(ip, port, state) {
         this.target = { ip, port: Number(port) || 4950 };
         this.state = state;
+        this.lastUpdate = Date.now();
         this.idleSince = neutral(state) ? this.idleSince || Date.now() : 0;
         if (!this.timer) this.timer = setInterval(() => this.tick(), 1e3 / 60);
         this.tick();
       }
       tick() {
         if (!this.state || !this.target) return;
-        this.sock.send(buildPacket(this.state), this.target.port, this.target.ip);
+        if (!neutral(this.state) && Date.now() - this.lastUpdate > 2e3) {
+          this.state = { b: 0, cx: 0, cy: 0, sx: 0, sy: 0, t: null };
+          this.idleSince = Date.now();
+        }
+        this.sock.send(buildPacket(this.state), this.target.port, this.target.ip, (err) => {
+          if (err) this.lastError = err.message;
+          else this.lastError = "";
+        });
+        this.sent++;
         if (this.idleSince && Date.now() - this.idleSince > 300) this.stop();
       }
       stop() {
@@ -717,6 +737,7 @@ module.exports = function start(ctx) {
     if (!padSender) padSender = new PadSender();
     padSender.update(String(ip), port, state);
   });
+  handle("pad:status", () => ({ sent: padSender ? padSender.sent : 0, error: padSender ? padSender.lastError : "" }));
   handle("power:do", async (action) => {
     if (!settings.allowPower) throw new Error("Desactivado en este PC (Forja de escritorio \u2192 Este equipo \u2192 Permitir bloquear/suspender/apagar)");
     await power.runPower(action);
