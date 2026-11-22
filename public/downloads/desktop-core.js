@@ -574,6 +574,22 @@ module.exports = function start(ctx) {
   const fsApi = roots.api(getRoots);
   let win = null, tray = null, quitting = false, padSender = null, relayHandle = null, relayError = "";
   const iconPath = path.join(ctx.shellDir, "icon.png");
+  function preloadPath() {
+    const shellCopy = path.join(ctx.shellDir, "preload.js");
+    try {
+      const src = true ? "'use strict'\nconst { contextBridge, ipcRenderer } = require('electron')\nconst inv = (n, ...a) => ipcRenderer.invoke('forja:' + n, ...a)\n\ncontextBridge.exposeInMainWorld('forjaDesktop', {\n  isDesktop: true,\n  info: () => inv('info'),\n  getSettings: () => inv('settings:get'),\n  setSettings: patch => inv('settings:set', patch),\n  pickRoot: () => inv('roots:pick'),\n  removeRoot: p => inv('roots:remove', p),\n  fs: {\n    list: p => inv('fs:list', p),\n    size: p => inv('fs:size', p),\n    read: (p, offset, length) => inv('fs:read', p, offset, length),\n    write: (p, data, append) => inv('fs:write', p, data, append),\n    mkdir: p => inv('fs:mkdir', p),\n    rename: (a, b) => inv('fs:rename', a, b),\n    remove: p => inv('fs:remove', p),\n  },\n  relayStatus: () => inv('relay:status'),\n  openFirewall: () => inv('fw:allow'),\n  padStatus: () => inv('pad:status'),\n  power: action => inv('power:do', action),\n  ntrStart: (ip, opts) => inv('ntr:start', ip, opts),\n  ntrStatus: () => inv('ntr:status'),\n  ntrStop: () => inv('ntr:stop'),\n  onNtrFrame: cb => { const f = (_e, screen, data) => cb(screen, data); ipcRenderer.on('forja:ntr-frame', f); return () => ipcRenderer.removeListener('forja:ntr-frame', f) },\n  checkUpdate: () => inv('update:check'),\n  applyUpdate: () => inv('update:apply'),\n  inputMouse: m => ipcRenderer.send('forja:input:mouse', m),\n  inputKey: m => ipcRenderer.send('forja:input:key', m),\n  padSend: (ip, port, state) => ipcRenderer.send('forja:pad', ip, port, state),\n})\n" : fs.readFileSync(shellCopy, "utf8");
+      const file = path.join(app.getPath("userData"), "forja-preload.js");
+      let cur = "";
+      try {
+        cur = fs.readFileSync(file, "utf8");
+      } catch {
+      }
+      if (cur !== src) fs.writeFileSync(file, src);
+      return file;
+    } catch {
+      return shellCopy;
+    }
+  }
   function createWindow() {
     win = new BrowserWindow({
       width: 1280,
@@ -585,7 +601,7 @@ module.exports = function start(ctx) {
       title: "Forja",
       icon: iconPath,
       autoHideMenuBar: true,
-      webPreferences: { preload: path.join(ctx.shellDir, "preload.js"), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false }
+      webPreferences: { preload: preloadPath(), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false }
     });
     win.removeMenu();
     win.loadURL(settings.webUrl).catch(() => {
