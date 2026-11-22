@@ -1,3 +1,4 @@
+import { ErrorBoundary, OfflineBanner } from './ErrorBoundary'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { Home, KanbanSquare, Gamepad2, Users, Settings as Cog, Tablet, LogOut, ChevronsUpDown, Check, Plug, Monitor, CalendarDays, FileText, Search, Sun, Moon, SunMoon } from 'lucide-react'
 import NotificationBell from './NotificationBell'
@@ -85,7 +86,7 @@ export default function Layout() {
           </button>
         </div>
       </aside>
-      <main className="main"><Outlet /></main>
+      <main className="main"><OfflineBanner /><ErrorBoundary key={loc.pathname}><Outlet /></ErrorBoundary></main>
       <CommandPalette />
     </div>
   )

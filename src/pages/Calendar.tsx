@@ -33,7 +33,7 @@ export default function CalendarPage() {
   }, [me])
   useEffect(() => { void load() }, [load])
   useEffect(() => {
-    const ch = sb().channel('calendar').on('postgres_changes', { event: '*', schema: 'public', table: 'cards' }, () => { void load() }).subscribe()
+    const ch = sb().channel(`calendar-${Math.random().toString(36).slice(2, 7)}`).on('postgres_changes', { event: '*', schema: 'public', table: 'cards' }, () => { void load() }).subscribe()
     return () => { void sb().removeChannel(ch) }
   }, [load])
 
@@ -43,6 +43,22 @@ export default function CalendarPage() {
     for (const r of visible) { const k = key(new Date(r.due_date!)); m.set(k, [...(m.get(k) ?? []), r]) }
     return m
   }, [visible])
+
+  const exportIcs = () => {
+    const esc = (t: string) => t.replace(/([,;\\])/g, '\\$1').replace(/\r?\n/g, '\\n')
+    const ymd = (d: Date) => `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`
+    const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Forja//ES', 'CALSCALE:GREGORIAN']
+    for (const r of visible) {
+      const d = new Date(r.due_date!)
+      lines.push('BEGIN:VEVENT', `UID:${r.id}@forja`, `DTSTAMP:${new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+/, '')}`,
+        `DTSTART;VALUE=DATE:${ymd(d)}`, `DTEND;VALUE=DATE:${ymd(new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1))}`,
+        `SUMMARY:${esc(`${r.completed ? '✔ ' : ''}${r.title}`)}`, `DESCRIPTION:${esc(r.projects?.name ?? '')}`, 'END:VEVENT')
+    }
+    lines.push('END:VCALENDAR')
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(new Blob([lines.join('\r\n')], { type: 'text/calendar' })); a.download = 'forja-fechas.ics'; a.click()
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000)
+  }
 
   if (!rows) return <Spinner />
   const today = startOfDay(new Date())
@@ -82,6 +98,7 @@ export default function CalendarPage() {
             <button className="icon-btn" onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() + 1, 1))} aria-label="Mes siguiente"><ChevronRight size={18} /></button>
             <button className="btn sm" onClick={() => { const d = new Date(); setMonth(new Date(d.getFullYear(), d.getMonth(), 1)) }}>Hoy</button>
             <div className="spacer" />
+            <button className="btn sm" onClick={exportIcs} disabled={!visible.length} title="Para Google Calendar, Outlook, Apple…">Exportar .ics</button>
             <label className="row" style={{ gap: 6 }}><input type="checkbox" checked={onlyMine} onChange={e => setOnlyMine(e.target.checked)} /> Solo las mías</label>
           </div>
           <div className="cal-grid">

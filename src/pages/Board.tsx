@@ -160,6 +160,14 @@ export default function Board() {
     const { error: e } = await sb().from('cards').delete().in('id', done.map(c => c.id))
     if (e) toast(errMsg(e), 'err')
   }
+  async function sortByDue(id: string) {
+    const col = cards.filter(c => c.list_id === id).sort((a, b) => (a.due_date ? Date.parse(a.due_date) : Infinity) - (b.due_date ? Date.parse(b.due_date) : Infinity))
+    const moved = col.map((c, i) => ({ c, position: (i + 1) * 1000 })).filter(x => x.c.position !== x.position)
+    if (!moved.length) return
+    moved.forEach(x => upsert('cards', { id: x.c.id, position: x.position }))
+    const res = await Promise.all(moved.map(x => sb().from('cards').update({ position: x.position }).eq('id', x.c.id)))
+    const bad = res.find(r => r.error); if (bad?.error) toast(errMsg(bad.error), 'err')
+  }
   async function moveList(id: string, dir: -1 | 1) {
     const i = sortedLists.findIndex(l => l.id === id)
     const j = i + dir
@@ -210,7 +218,7 @@ export default function Board() {
               <ListColumn key={l.id} id={l.id} name={l.name} canEdit={canEdit}
                 cards={byList.get(l.id) ?? []} count={(byList.get(l.id) ?? []).length}
                 first={idx === 0} last={idx === sortedLists.length - 1}
-                onRename={n => renameList(l.id, n)} onDelete={() => deleteList(l.id)} onClearDone={() => clearDone(l.id)} onMove={d => moveList(l.id, d)}
+                onRename={n => renameList(l.id, n)} onDelete={() => deleteList(l.id)} onClearDone={() => clearDone(l.id)} onSortDue={() => sortByDue(l.id)} onMove={d => moveList(l.id, d)}
                 onAdd={t => addCard(l.id, t)}
                 renderCard={c => (
                   <CardTile card={c} labels={labelsOf(c.id)}
@@ -259,9 +267,9 @@ function usePresence(projectId: string, me: string) {
 }
 
 /* ---------------------------------- Lista ---------------------------------- */
-function ListColumn({ id, name, cards, count, canEdit, first, last, onRename, onDelete, onClearDone, onMove, onAdd, renderCard }: {
+function ListColumn({ id, name, cards, count, canEdit, first, last, onRename, onDelete, onClearDone, onSortDue, onMove, onAdd, renderCard }: {
   id: string; name: string; cards: Card[]; count: number; canEdit: boolean; first: boolean; last: boolean
-  onRename: (n: string) => void; onDelete: () => void; onClearDone: () => void; onMove: (d: -1 | 1) => void; onAdd: (t: string) => void
+  onRename: (n: string) => void; onDelete: () => void; onClearDone: () => void; onSortDue: () => void; onMove: (d: -1 | 1) => void; onAdd: (t: string) => void
   renderCard: (c: Card) => React.ReactNode
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: `list-${id}`, data: { type: 'list', listId: id } })
@@ -295,6 +303,7 @@ function ListColumn({ id, name, cards, count, canEdit, first, last, onRename, on
                 <button onClick={() => setEditing(true)}>Renombrar</button>
                 {!first && <button onClick={() => onMove(-1)}>Mover a la izquierda</button>}
                 {!last && <button onClick={() => onMove(1)}>Mover a la derecha</button>}
+                {cards.length > 1 && <button onClick={onSortDue}>Ordenar por fecha límite</button>}
                 {cards.some(c => c.completed) && <button onClick={onClearDone}>Eliminar completadas</button>}
                 <button className="danger" onClick={onDelete}>Eliminar lista</button>
               </div>
