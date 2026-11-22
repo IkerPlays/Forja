@@ -465,6 +465,45 @@ var require_ntr = __commonJS({
   }
 });
 
+// src/core/power.js
+var require_power = __commonJS({
+  "src/core/power.js"(exports2, module2) {
+    "use strict";
+    var { execFile } = require("node:child_process");
+    var ACTIONS = ["lock", "sleep", "restart", "shutdown"];
+    function powerCommand(platform, action) {
+      if (!ACTIONS.includes(action)) throw new Error("Acci\xF3n no v\xE1lida");
+      if (platform === "win32") {
+        return {
+          lock: ["rundll32.exe", ["user32.dll,LockWorkStation"]],
+          sleep: ["rundll32.exe", ["powrprof.dll,SetSuspendState", "0,1,0"]],
+          restart: ["shutdown", ["/r", "/t", "10"]],
+          shutdown: ["shutdown", ["/s", "/t", "10"]]
+        }[action];
+      }
+      if (platform === "darwin") {
+        return {
+          lock: ["pmset", ["displaysleepnow"]],
+          sleep: ["pmset", ["sleepnow"]],
+          restart: ["osascript", ["-e", 'tell application "System Events" to restart']],
+          shutdown: ["osascript", ["-e", 'tell application "System Events" to shut down']]
+        }[action];
+      }
+      return {
+        lock: ["loginctl", ["lock-session"]],
+        sleep: ["systemctl", ["suspend"]],
+        restart: ["systemctl", ["reboot"]],
+        shutdown: ["systemctl", ["poweroff"]]
+      }[action];
+    }
+    function runPower(action, platform = process.platform) {
+      const [cmd, args] = powerCommand(platform, action);
+      return new Promise((resolve, reject) => execFile(cmd, args, { windowsHide: true }, (err) => err ? reject(new Error("No se pudo ejecutar: " + err.message)) : resolve()));
+    }
+    module2.exports = { powerCommand, runPower, ACTIONS };
+  }
+});
+
 // src/core/index.js
 module.exports = function start(ctx) {
   const { app, BrowserWindow, Tray, Menu, ipcMain, dialog, session, desktopCapturer, shell, screen, nativeImage, Notification } = ctx.electron;
@@ -477,6 +516,7 @@ module.exports = function start(ctx) {
   const relay = require_relay();
   const { PadSender } = require_pad();
   const ntr = require_ntr();
+  const power = require_power();
   const DEFAULT_WEB_URL = process.env.FORJA_URL || "https://forja-hub.netlify.app";
   const startHidden = process.argv.includes("--hidden");
   if (!app.requestSingleInstanceLock()) {
@@ -484,7 +524,7 @@ module.exports = function start(ctx) {
     process.exit(0);
   }
   const settingsFile = () => path.join(app.getPath("userData"), "forja-desktop.json");
-  let settings = { webUrl: DEFAULT_WEB_URL, roots: [], fullAccess: true, allowInput: true, allowScreen: true, shareCamera: false, shareMic: false, screenQuality: "fluid", deviceId: "", relay: true, autostart: false, hostId: "" };
+  let settings = { webUrl: DEFAULT_WEB_URL, roots: [], fullAccess: true, allowInput: true, allowScreen: true, shareCamera: false, shareMic: false, allowPower: false, screenQuality: "fluid", deviceId: "", relay: true, autostart: false, hostId: "" };
   function loadSettings() {
     let first = false;
     try {
@@ -619,7 +659,7 @@ module.exports = function start(ctx) {
   }));
   handle("settings:get", () => safeSettings());
   handle("settings:set", async (patch) => {
-    for (const k of ["fullAccess", "allowInput", "allowScreen", "shareCamera", "shareMic", "relay", "autostart"]) if (k in patch) settings[k] = !!patch[k];
+    for (const k of ["fullAccess", "allowInput", "allowScreen", "shareCamera", "shareMic", "allowPower", "relay", "autostart"]) if (k in patch) settings[k] = !!patch[k];
     if (typeof patch.deviceId === "string") settings.deviceId = patch.deviceId;
     if (patch.screenQuality === "fluid" || patch.screenQuality === "native") settings.screenQuality = patch.screenQuality;
     saveSettings();
@@ -676,6 +716,10 @@ module.exports = function start(ctx) {
   ipcMain.on("forja:pad", (_e, ip, port, state) => {
     if (!padSender) padSender = new PadSender();
     padSender.update(String(ip), port, state);
+  });
+  handle("power:do", async (action) => {
+    if (!settings.allowPower) throw new Error("Desactivado en este PC (Forja de escritorio \u2192 Este equipo \u2192 Permitir bloquear/suspender/apagar)");
+    await power.runPower(action);
   });
   let ntrRx = null;
   handle("ntr:start", async (ip, opts) => {
