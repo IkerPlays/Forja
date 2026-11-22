@@ -38,3 +38,9 @@ export interface ForjaDesktop {
 export const desktop: ForjaDesktop | undefined =
   typeof window !== 'undefined' ? ((window as unknown as { forjaDesktop?: ForjaDesktop }).forjaDesktop) : undefined
 export const isDesktop = !!desktop
+
+const REQUIRED = ['ntrStart', 'ntrStop', 'onNtrFrame', 'padSend', 'padStatus', 'checkUpdate', 'power'] as const
+/** Funciones que esta web necesita y el instalador de escritorio instalado aún no tiene (instalador antiguo). */
+export const missingDesktopApis = (): string[] => (desktop ? REQUIRED.filter(k => typeof (desktop as unknown as Record<string, unknown>)[k] !== 'function') : [])
+export const RELEASES_URL = 'https://github.com/IkerPlays/Forja/releases/latest'
+export const OUTDATED_SHELL_MSG = 'Tu instalador de Forja para escritorio es antiguo y no incluye esta función. Descarga e instala el último desde ' + RELEASES_URL + ' (solo hace falta una vez; después se actualiza solo).'

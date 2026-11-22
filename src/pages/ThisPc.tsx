@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { RefreshCw, FolderPlus, HardDrive, Monitor, MousePointer2, Power, Radio, Trash2, Eye, Video } from 'lucide-react'
-import { desktop, type DesktopSettings } from '../lib/native'
+import { desktop, missingDesktopApis, RELEASES_URL, type DesktopSettings } from '../lib/native'
 import { useHostState } from '../components/DesktopHostMount'
 import { desktopHost, type ConsoleInfo } from '../lib/desktopHost'
 import { PageHeader, StatusDot, useToast } from '../components/ui'
@@ -137,6 +137,14 @@ export default function ThisPc() {
           {!host.list.length && <p className="muted small">Aún no hay ninguna 3DS en el estudio (3DS → Añadir).</p>}
         </div>
       </section>
+
+      {missingDesktopApis().length > 0 && (
+        <section className="panel stack" role="alert" style={{ borderColor: 'var(--accent)' }}>
+          <h2><RefreshCw size={17} /> Instalador antiguo</h2>
+          <p className="small">Este instalador no incluye: {missingDesktopApis().join(', ')}. Por eso fallan cosas como la pantalla de la 3DS («onNtrFrame is not a function»). Instala el último una sola vez; después Forja se actualiza sola.</p>
+          <a className="btn primary" href={RELEASES_URL} target="_blank" rel="noreferrer">Descargar el último instalador</a>
+        </section>
+      )}
 
       <section className="panel stack">
         <h2><RefreshCw size={17} /> Actualizaciones</h2>

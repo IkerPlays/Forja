@@ -1,4 +1,4 @@
-import { desktop } from './native'
+import { desktop, missingDesktopApis, OUTDATED_SHELL_MSG } from './native'
 
 /**
  * Pantalla de la 3DS como vídeo: la app de escritorio recibe los fotogramas JPEG de NTR/NTR-HR y aquí se componen en un
@@ -23,6 +23,7 @@ export class NtrSource {
   /** Arranca NTR en la 3DS y devuelve el vídeo. Falla si en unos segundos no llega imagen. */
   async start(): Promise<MediaStream> {
     const d = desktop!
+    if (missingDesktopApis().some(k => k.startsWith('ntr') || k === 'onNtrFrame')) throw new Error(OUTDATED_SHELL_MSG)
     this.off = d.onNtrFrame((screen, jpeg) => { void this.draw(screen, jpeg) })
     const stream = this.canvas.captureStream(60)
     const track = stream.getVideoTracks()[0]
