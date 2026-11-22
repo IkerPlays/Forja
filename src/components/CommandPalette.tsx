@@ -18,6 +18,7 @@ export default function CommandPalette() {
   const [q, setQ] = useState('')
   const [sel, setSel] = useState(0)
   const [data, setData] = useState<Item[]>([])
+  const [help, setHelp] = useState(false)
   const [cards, setCards] = useState<Item[]>([])
   const input = useRef<HTMLInputElement>(null)
 
@@ -27,7 +28,8 @@ export default function CommandPalette() {
       const typing = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (e.target as HTMLElement)?.isContentEditable
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); setOpen(o => !o) }
       else if (e.key === '/' && !typing) { e.preventDefault(); setOpen(true) }
-      else if (e.key === 'Escape') setOpen(false)
+      else if (e.key === '?' && !typing) { e.preventDefault(); setHelp(h => !h) }
+      else if (e.key === 'Escape') { setOpen(false); setHelp(false) }
     }
     const onOpen = () => setOpen(true)
     window.addEventListener('keydown', onKey); window.addEventListener('forja:palette', onOpen)
@@ -86,6 +88,20 @@ export default function CommandPalette() {
   }, [q, data, cards])
 
   useEffect(() => { setSel(0) }, [q])
+  if (help && !open) return (
+    <div className="modal-back" onMouseDown={e => { if (e.target === e.currentTarget) setHelp(false) }}>
+      <div className="modal" role="dialog" aria-label="Atajos de teclado" style={{ maxWidth: 420 }}>
+        <h3 style={{ marginTop: 0 }}>Atajos de teclado</h3>
+        <dl className="shortcuts">
+          <dt><kbd>Ctrl</kbd>+<kbd>K</kbd> · <kbd>/</kbd></dt><dd>Búsqueda global</dd>
+          <dt><kbd>?</kbd></dt><dd>Esta ayuda</dd>
+          <dt><kbd>Esc</kbd></dt><dd>Cerrar ventanas</dd>
+          <dt><kbd>@</kbd></dt><dd>Mencionar en comentarios y chat</dd>
+          <dt><kbd>Ctrl</kbd>+<kbd>V</kbd></dt><dd>Pegar una captura en una tarjeta</dd>
+        </dl>
+      </div>
+    </div>
+  )
   if (!open) return null
 
   const go = (it: Item) => { setOpen(false); nav(it.to) }

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { AtSign, Bell, CheckCheck, MessageSquare, UserPlus, MessageCircle } from 'lucide-react'
+import { AtSign, Bell, CheckCheck, MessageSquare, UserPlus, MessageCircle, AlarmClock } from 'lucide-react'
 import { askNotificationPermission, notices, notificationPermission, notificationsSupported, useNotices } from '../lib/notify'
 import { timeAgo } from '../lib/util'
 
@@ -19,7 +19,7 @@ export default function NotificationBell() {
     return () => document.removeEventListener('mousedown', close)
   }, [open])
 
-  const Icon = (k: string) => (k === 'mention' ? <AtSign size={15} /> : k === 'assign' ? <UserPlus size={15} /> : k === 'message' ? <MessageSquare size={15} /> : <MessageCircle size={15} />)
+  const Icon = (k: string) => (k === 'mention' ? <AtSign size={15} /> : k === 'due' ? <AlarmClock size={15} /> : k === 'assign' ? <UserPlus size={15} /> : k === 'message' ? <MessageSquare size={15} /> : <MessageCircle size={15} />)
 
   return (
     <div className="bell" ref={box}>

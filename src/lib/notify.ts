@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react'
 import { sb } from './supabase'
 
-export interface Notice { id: string; at: number; kind: 'assign' | 'comment' | 'message' | 'mention'; title: string; body: string; href: string; read: boolean }
+export interface Notice { id: string; at: number; kind: 'assign' | 'comment' | 'message' | 'mention' | 'due'; title: string; body: string; href: string; read: boolean }
 
 class NoticeStore {
   items: Notice[] = []
@@ -46,6 +46,8 @@ export function startNotifications(uid: string) {
   notices.load(uid)
   let myName = ''
   void sb().from('profiles').select('display_name').eq('id', uid).maybeSingle().then(({ data }) => { myName = data?.display_name ?? '' })
+  void remindDue(uid)
+  const dueTimer = window.setInterval(() => { void remindDue(uid) }, 3600_000)
   const mentions = (body: string) => !!myName && body.includes(`@[${myName}]`)
   const lastMsg = new Map<string, number>()
   const here = (href: string) => location.pathname === href && document.visibilityState === 'visible'
@@ -87,5 +89,27 @@ export function startNotifications(uid: string) {
       notices.add({ kind: mentioned ? 'mention' : 'message', title: mentioned ? `${who?.display_name ?? 'Alguien'} te mencionó en ${pr?.name ?? 'un chat'}` : `${who?.display_name ?? 'Alguien'} en el chat de ${pr?.name ?? 'un proyecto'}`, body: m.body.replace(/@\[([^\]]+)\]/g, '@$1').slice(0, 120), href })
     })
     .subscribe()
-  return () => { void sb().removeChannel(ch) }
+  return () => { window.clearInterval(dueTimer); void sb().removeChannel(ch) }
+}
+
+/** Avisa (una vez por tarjeta y fecha) de mis tarjetas que vencen en 24 h o ya vencieron. */
+async function remindDue(uid: string) {
+  try {
+    const { data: mine } = await sb().from('card_assignees').select('card_id').eq('user_id', uid)
+    const ids = (mine ?? []).map(r => r.card_id as string)
+    if (!ids.length) return
+    const limit = new Date(Date.now() + 24 * 3600_000).toISOString()
+    const { data } = await sb().from('cards').select('id, title, due_date, project_id, completed').in('id', ids).eq('completed', false).not('due_date', 'is', null).lte('due_date', limit)
+    const key = `forja.due.${uid}`
+    let seen: string[] = []
+    try { seen = JSON.parse(localStorage.getItem(key) || '[]') } catch { /* noop */ }
+    for (const c of (data ?? []) as { id: string; title: string; due_date: string; project_id: string }[]) {
+      const tag = `${c.id}:${c.due_date}`
+      if (seen.includes(tag)) continue
+      seen.push(tag)
+      const late = new Date(c.due_date).getTime() < Date.now()
+      notices.add({ kind: 'due', title: late ? 'Tarea vencida' : 'Vence en menos de 24 h', body: c.title, href: `/tasks/${c.project_id}` })
+    }
+    try { localStorage.setItem(key, JSON.stringify(seen.slice(-200))) } catch { /* noop */ }
+  } catch { /* noop */ }
 }

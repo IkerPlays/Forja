@@ -16,6 +16,7 @@ El hub personal de tu estudio, para la **tablet** y el **PC**. Un solo sitio par
 * **Tablero**: búsqueda y filtros (etiqueta, mis tarjetas, vencidas), **gestor de etiquetas**, descripciones y comentarios en **Markdown**.
 * **Notas** del estudio en Markdown, en tiempo real.
 * **Importar de Trello** (JSON), exportar un proyecto y **copia de seguridad** del estudio.
+* **Recordatorios de vencimiento** (tarjetas tuyas que vencen en 24 h o vencidas) y ayuda de atajos con `?`.
 * **Notificaciones**: tareas que te asignan, comentarios en tus tarjetas y mensajes del chat (también avisos del sistema).
 * **Pantalla remota**: captura de pantalla y grabación en WebM; pantalla + cámara + micrófono; 3DS por NTR con táctil.
 * **PC**: bloquear, suspender, reiniciar y apagar a distancia (opcional, desactivado por defecto).
