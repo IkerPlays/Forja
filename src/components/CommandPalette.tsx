@@ -83,7 +83,10 @@ export default function CommandPalette() {
 
   const results = useMemo(() => {
     const nq = norm(q.trim())
-    const base = nq ? data.filter(i => norm(i.label + ' ' + (i.hint ?? '')).includes(nq)) : data.filter(i => i.group === 'Ir a' || i.group === 'Proyectos').slice(0, 12)
+    let recent: string[] = []
+    try { recent = JSON.parse(localStorage.getItem('forja.recent') || '[]') } catch { /* noop */ }
+    const recents = nq ? [] : recent.map(id => data.find(i => i.id === 'pr' + id)).filter(Boolean).map(i => ({ ...i!, id: 'rc' + i!.id, group: 'Recientes' }))
+    const base = nq ? data.filter(i => norm(i.label + ' ' + (i.hint ?? '')).includes(nq)) : [...recents, ...data.filter(i => i.group === 'Ir a' || (i.group === 'Proyectos' && !recent.includes(i.id.slice(2))))].slice(0, 14)
     return [...base.slice(0, 14), ...cards]
   }, [q, data, cards])
 

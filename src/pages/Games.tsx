@@ -54,6 +54,11 @@ export default function Games() {
     <div className="page">
       <PageHeader title="Juegos" sub="Tu biblioteca, sincronizada con Tareas y con tu PC."
         actions={<>
+          {games.length > 0 && <button className="btn" onClick={() => {
+            const q = (v: string) => `"${String(v ?? '').replace(/"/g, '""')}"`
+            const csv = ['Nombre,Plataforma,Estado,Versión,Repositorio,Tienda', ...games.map(g => [g.name, g.platform, STATUSES[g.status]?.label ?? g.status, g.version, g.repo_url, g.store_url].map(q).join(','))].join('\r\n')
+            const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['\ufeff' + csv], { type: 'text/csv' })); a.download = 'juegos.csv'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000)
+          }}>Exportar CSV</button>}
           <Link to="/games/pc" className="btn"><Monitor size={16} /> Mi PC</Link>
           <button className="btn primary" onClick={() => setCreating(true)}><Plus size={16} /> Nuevo juego</button>
         </>} />

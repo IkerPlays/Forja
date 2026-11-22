@@ -33,6 +33,10 @@ export default function Board() {
     setOpenCardRaw(id)
     try { const u = new URL(location.href); if (id) u.searchParams.set('card', id); else u.searchParams.delete('card'); history.replaceState(null, '', u) } catch { /* noop */ }
   }
+  useEffect(() => {
+    if (!project) return
+    try { const r: string[] = JSON.parse(localStorage.getItem('forja.recent') || '[]'); localStorage.setItem('forja.recent', JSON.stringify([project.id, ...r.filter(x => x !== project.id)].slice(0, 4))) } catch { /* noop */ }
+  }, [project?.id])
   const [chat, setChat] = useState(false)
   const [settings, setSettings] = useState(false)
   const [dragging, setDragging] = useState<Card | null>(null)

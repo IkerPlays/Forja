@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Eye, FileText, Pencil, Pin, PinOff, Plus, Search, Trash2 } from 'lucide-react'
+import { Download, Eye, FileText, Pencil, Pin, PinOff, Plus, Search, Trash2 } from 'lucide-react'
 import { sb } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import { useStudio } from '../context/StudioContext'
@@ -89,13 +89,17 @@ export default function Notes() {
                   <input className="title-input" value={title} onChange={e => { setTitle(e.target.value); save(e.target.value, body, current.id) }} aria-label="Título" />
                   <div className="spacer" />
                   <button className="btn sm" onClick={() => setEdit(e => !e)}>{edit ? <><Eye size={14} /> Vista</> : <><Pencil size={14} /> Editar</>}</button>
+                  <button className="icon-btn" aria-label="Descargar .md" title="Descargar como .md" onClick={() => {
+                    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([`# ${title}\n\n${body}`], { type: 'text/markdown' }))
+                    a.download = `${(title || 'nota').replace(/[\\/:*?"<>|]+/g, '-').slice(0, 60)}.md`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000)
+                  }}><Download size={16} /></button>
                   <button className="icon-btn" onClick={() => togglePin(current)} aria-label="Fijar">{current.pinned ? <PinOff size={16} /> : <Pin size={16} />}</button>
                   <button className="icon-btn" onClick={() => remove(current)} aria-label="Eliminar"><Trash2 size={16} /></button>
                 </div>
                 {edit
                   ? <textarea className="note-area" value={body} placeholder={'# Título\n\n- [ ] tarea\n- **negrita**, *cursiva*, `código`'} onChange={e => { setBody(e.target.value); save(title, e.target.value, current.id) }} />
                   : <Markdown text={body || '*Nota vacía*'} />}
-                <small className="muted">Se guarda sola · actualizada {timeAgo(current.updated_at)}</small>
+                <small className="muted">Se guarda sola · {body.trim() ? body.trim().split(/\s+/).length : 0} palabras · actualizada {timeAgo(current.updated_at)}</small>
               </>
             )}
           </section>
