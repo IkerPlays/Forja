@@ -60,3 +60,7 @@ cd desktop && npm install && npm run selftest
 ## Seguridad en una frase
 
 Todo está protegido con **RLS** en Postgres: solo ves lo de tu estudio y los proyectos a los que te invitan; los colaboradores de proyecto no pueden ver el resto del estudio; del PC solo se expone lo que eliges en *Este equipo*.
+
+## Créditos
+
+Creado por Iker´s Studio.
