@@ -76,7 +76,7 @@ export default function CommandPalette() {
     const t = setTimeout(async () => {
       const { data: rows } = await sb().from('cards').select('id,title,project_id,projects(name)').ilike('title', `%${q.trim()}%`).limit(8)
       setCards(((rows ?? []) as unknown as { id: string; title: string; project_id: string; projects: { name: string } | null }[])
-        .map(c => ({ id: 'c' + c.id, label: c.title, hint: c.projects?.name, icon: <FileText size={16} />, to: `/tasks/${c.project_id}`, group: 'Tarjetas' })))
+        .map(c => ({ id: 'c' + c.id, label: c.title, hint: c.projects?.name, icon: <FileText size={16} />, to: `/tasks/${c.project_id}?card=${c.id}`, group: 'Tarjetas' })))
     }, 200)
     return () => clearTimeout(t)
   }, [q, open])

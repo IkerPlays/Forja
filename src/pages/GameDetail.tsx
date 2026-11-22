@@ -41,7 +41,7 @@ export default function GameDetail() {
 
   useEffect(() => { void load() }, [load])
   useEffect(() => {
-    const ch = sb().channel(`game-${gameId}`)
+    const ch = sb().channel(`game-${gameId}-${Math.random().toString(36).slice(2, 7)}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'cards' }, () => { void load() })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'games', filter: `id=eq.${gameId}` }, () => { void load() })
       .subscribe()

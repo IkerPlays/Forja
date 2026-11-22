@@ -5,7 +5,7 @@ import { useAuth } from '../context/AuthContext'
 import { useStudio } from '../context/StudioContext'
 import { Avatar, ColorPicker, Field, PageHeader, useToast } from '../components/ui'
 import { COLORS, errMsg, uid } from '../lib/util'
-import { getTheme, setTheme, type ThemePref } from '../lib/theme'
+import { ACCENTS, getAccent, getTheme, setAccent, setTheme, type ThemePref } from '../lib/theme'
 
 export default function Settings() {
   const { profile, session, refreshProfile, signOut } = useAuth()
@@ -18,6 +18,7 @@ export default function Settings() {
   const [studioName, setStudioName] = useState('')
   const [installable, setInstallable] = useState(() => !!(window as unknown as { __installPrompt?: unknown }).__installPrompt)
   useEffect(() => { const f = () => setInstallable(true); window.addEventListener('forja:installable', f); return () => window.removeEventListener('forja:installable', f) }, [])
+  const [accent, setAccentSel] = useState(getAccent())
   const [theme, setThemeSel] = useState<ThemePref>(getTheme())
 
   async function save(e: React.FormEvent) {
@@ -70,6 +71,10 @@ export default function Settings() {
       <section className="panel stack">
         <h2>Apariencia</h2>
         <div className="seg">{(['auto', 'dark', 'light'] as ThemePref[]).map(t => <button key={t} className={theme === t ? 'on' : ''} onClick={() => { setTheme(t); setThemeSel(t) }}>{t === 'auto' ? 'Automático' : t === 'dark' ? 'Oscuro' : 'Claro'}</button>)}</div>
+        <div className="row" style={{ gap: 8, flexWrap: 'wrap' }} role="group" aria-label="Color de acento">
+          {ACCENTS.map(c => <button key={c.name} type="button" className={'swatch' + (accent === c.name ? ' on' : '')} title={c.name} aria-label={c.name} aria-pressed={accent === c.name}
+            style={{ background: `linear-gradient(135deg, ${c.b}, ${c.a})` }} onClick={() => { setAccent(c.name); setAccentSel(c.name) }} />)}
+        </div>
         {installable && <button className="btn" onClick={async () => {
           const ev = (window as unknown as { __installPrompt?: { prompt: () => Promise<void> } }).__installPrompt
           await ev?.prompt(); setInstallable(false)

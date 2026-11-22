@@ -310,6 +310,7 @@ export default function CardModal({ board, cardId, canEdit, upsert, remove, onCl
             <label className="side-field"><span><ArrowRightLeft size={14} /> Mover a</span>
               <select value={card.list_id} onChange={e => void moveTo(e.target.value)}>{[...board.lists].sort((a, b) => a.position - b.position).map(l => <option key={l.id} value={l.id}>{l.name}</option>)}</select></label>
           )}
+          <button className="btn block" onClick={() => { const u = new URL(location.href); u.searchParams.set('card', card.id); void navigator.clipboard?.writeText(u.toString()).then(() => toast('Enlace copiado'), () => toast('No se pudo copiar', 'err')) }}><Copy size={15} /> Copiar enlace</button>
           {canEdit && <button className="btn block" onClick={() => void duplicate()}><Copy size={15} /> Duplicar tarjeta</button>}
           {canEdit && <button className="btn danger block" onClick={deleteCard}><Trash2 size={15} /> Eliminar</button>}
         </aside>

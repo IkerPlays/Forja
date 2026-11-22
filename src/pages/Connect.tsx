@@ -27,7 +27,7 @@ export default function Connect() {
     if (!active) return
     const load = () => sb().from('devices').select('*').eq('studio_id', active.id).then(({ data }) => setDevices((data ?? []) as Device[]))
     void load()
-    const ch = sb().channel(`connect-${active.id}`).on('postgres_changes', { event: '*', schema: 'public', table: 'devices', filter: `studio_id=eq.${active.id}` }, () => void load()).subscribe()
+    const ch = sb().channel(`connect-${active.id}-${Math.random().toString(36).slice(2, 7)}`).on('postgres_changes', { event: '*', schema: 'public', table: 'devices', filter: `studio_id=eq.${active.id}` }, () => void load()).subscribe()
     return () => { void sb().removeChannel(ch) }
   }, [active])
 

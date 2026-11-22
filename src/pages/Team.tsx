@@ -43,7 +43,7 @@ export default function Team() {
   useEffect(() => { setName(active?.name ?? '') }, [active?.name])
   useEffect(() => {
     if (!active) return
-    const ch = sb().channel(`team-${active.id}`)
+    const ch = sb().channel(`team-${active.id}-${Math.random().toString(36).slice(2, 7)}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'studio_members', filter: `studio_id=eq.${active.id}` }, () => { void load() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'project_members' }, () => { void load() })
       .subscribe()

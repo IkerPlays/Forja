@@ -51,7 +51,7 @@ export function startNotifications(uid: string) {
   const mentions = (body: string) => !!myName && body.includes(`@[${myName}]`)
   const lastMsg = new Map<string, number>()
   const here = (href: string) => location.pathname === href && document.visibilityState === 'visible'
-  const ch = sb().channel(`notify-${uid}`)
+  const ch = sb().channel(`notify-${uid}-${Math.random().toString(36).slice(2, 7)}`)
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'card_assignees', filter: `user_id=eq.${uid}` }, async p => {
       const a = p.new as { card_id: string }
       const { data } = await sb().from('cards').select('title, project_id, projects(name)').eq('id', a.card_id).maybeSingle()
@@ -108,7 +108,7 @@ async function remindDue(uid: string) {
       if (seen.includes(tag)) continue
       seen.push(tag)
       const late = new Date(c.due_date).getTime() < Date.now()
-      notices.add({ kind: 'due', title: late ? 'Tarea vencida' : 'Vence en menos de 24 h', body: c.title, href: `/tasks/${c.project_id}` })
+      notices.add({ kind: 'due', title: late ? 'Tarea vencida' : 'Vence en menos de 24 h', body: c.title, href: `/tasks/${c.project_id}?card=${c.id}` })
     }
     try { localStorage.setItem(key, JSON.stringify(seen.slice(-200))) } catch { /* noop */ }
   } catch { /* noop */ }

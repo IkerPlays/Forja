@@ -75,7 +75,7 @@ export function useBoard(projectId: string) {
     })()
 
     // Un solo canal con todas las tablas del proyecto
-    let ch = sb().channel(`board-${projectId}`)
+    let ch = sb().channel(`board-${projectId}-${Math.random().toString(36).slice(2, 7)}`)
     for (const t of TABLES) {
       ch = ch
         .on('postgres_changes', { event: 'INSERT', schema: 'public', table: t.table, filter: `project_id=eq.${projectId}` },

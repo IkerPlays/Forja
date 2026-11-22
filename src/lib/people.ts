@@ -33,7 +33,7 @@ export function useProjectPeople(project: Project | null): PeopleData {
   useEffect(() => { void reload() }, [reload])
   useEffect(() => {
     if (!project) return
-    const ch = sb().channel(`people-${project.id}`)
+    const ch = sb().channel(`people-${project.id}-${Math.random().toString(36).slice(2, 7)}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'project_members', filter: `project_id=eq.${project.id}` }, () => { void reload() })
       .subscribe()
     return () => { void sb().removeChannel(ch) }

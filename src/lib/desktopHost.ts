@@ -46,7 +46,7 @@ class DesktopHost {
       this.patch({ running: true, deviceId: dev.id, hostname: info.hostname, error: undefined })
       await this.openLink(dev.id)
       await this.syncConsoles()
-      this.dsChannel = sb().channel(`host-devices-${studioId}`)
+      this.dsChannel = sb().channel(`host-devices-${studioId}-${Math.random().toString(36).slice(2, 7)}`)
         .on('postgres_changes', { event: '*', schema: 'public', table: 'devices', filter: `studio_id=eq.${studioId}` }, () => void this.syncConsoles())
         .subscribe()
     } catch (e) {

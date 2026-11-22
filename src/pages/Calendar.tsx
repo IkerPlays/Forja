@@ -64,7 +64,7 @@ export default function CalendarPage() {
   ]
 
   const item = (r: Row) => (
-    <Link key={r.id} to={`/tasks/${r.project_id}`} className={cn('cal-item', r.completed && 'done')} style={{ ['--c' as string]: r.projects?.color }} title={`${r.title} · ${r.projects?.name ?? ''}`}>
+    <Link key={r.id} to={`/tasks/${r.project_id}?card=${r.id}`} className={cn('cal-item', r.completed && 'done')} style={{ ['--c' as string]: r.projects?.color }} title={`${r.title} · ${r.projects?.name ?? ''}`}>
       {r.completed && <CheckCircle2 size={11} />}{r.title}
     </Link>
   )
@@ -105,7 +105,7 @@ export default function CalendarPage() {
               <h2 className={g.tone}>{g.title} <small className="muted">{g.list.length}</small></h2>
               <ul className="mini-list">
                 {g.list.map(r => (
-                  <li key={r.id}><Link to={`/tasks/${r.project_id}`}>{r.title}</Link>
+                  <li key={r.id}><Link to={`/tasks/${r.project_id}?card=${r.id}`}>{r.title}</Link>
                     <small className="muted"><span className="swatch sm" style={{ background: r.projects?.color }} /> {r.projects?.name} · {formatDate(r.due_date)}</small></li>
                 ))}
                 {!g.list.length && <li className="muted">Nada aquí 🎉</li>}

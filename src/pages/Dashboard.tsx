@@ -89,7 +89,7 @@ export default function Dashboard() {
           <ul className="mini-list">
             {mine.map(c => (
               <li key={c.id}>
-                <Link to={`/tasks/${c.project_id}`}>{c.title}</Link>
+                <Link to={`/tasks/${c.project_id}?card=${c.id}`}>{c.title}</Link>
                 <small className="muted"><span className="swatch sm" style={{ background: c.projects?.color }} /> {c.projects?.name}{c.due_date ? ` · ${formatDate(c.due_date)}` : ''}</small>
               </li>
             ))}

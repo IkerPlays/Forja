@@ -12,7 +12,7 @@ export function useDevices(studioId: string | undefined, kind: DeviceKind) {
   useEffect(() => { void load() }, [load])
   useEffect(() => {
     if (!studioId) return
-    const ch = sb().channel(`devices-${studioId}-${kind}`)
+    const ch = sb().channel(`devices-${studioId}-${kind}-${Math.random().toString(36).slice(2, 7)}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'devices', filter: `studio_id=eq.${studioId}` }, () => { void load() })
       .subscribe()
     return () => { void sb().removeChannel(ch) }

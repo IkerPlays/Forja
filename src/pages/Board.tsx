@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import {
   DndContext, DragOverlay, PointerSensor, TouchSensor, useDraggable, useDroppable, useSensor, useSensors,
   closestCorners, type DragEndEvent, type DragStartEvent,
@@ -26,7 +26,13 @@ export default function Board() {
   const { data, loading, error, upsert, remove } = useBoard(projectId)
   const { project, lists, cards, labels, cardLabels, assignees, checklist, comments } = data
 
-  const [openCard, setOpenCard] = useState<string | null>(null)
+  const [openCard, setOpenCardRaw] = useState<string | null>(() => new URLSearchParams(location.search).get('card'))
+  const { search, key: locKey } = useLocation()
+  useEffect(() => { const c = new URLSearchParams(search).get('card'); if (c) setOpenCardRaw(c) }, [search, locKey])
+  const setOpenCard = (id: string | null) => {
+    setOpenCardRaw(id)
+    try { const u = new URL(location.href); if (id) u.searchParams.set('card', id); else u.searchParams.delete('card'); history.replaceState(null, '', u) } catch { /* noop */ }
+  }
   const [chat, setChat] = useState(false)
   const [settings, setSettings] = useState(false)
   const [dragging, setDragging] = useState<Card | null>(null)
