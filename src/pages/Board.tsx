@@ -37,6 +37,7 @@ export default function Board() {
     if (!project) return
     try { const r: string[] = JSON.parse(localStorage.getItem('forja.recent') || '[]'); localStorage.setItem('forja.recent', JSON.stringify([project.id, ...r.filter(x => x !== project.id)].slice(0, 4))) } catch { /* noop */ }
   }, [project?.id])
+  const lastPos = useRef<Record<string, number>>({})
   const [chat, setChat] = useState(false)
   const [settings, setSettings] = useState(false)
   const [dragging, setDragging] = useState<Card | null>(null)
@@ -115,8 +116,10 @@ export default function Board() {
 
   async function addCard(listId: string, title: string) {
     const arr = byList.get(listId) ?? []
+    const position = posBetween(Math.max(arr[arr.length - 1]?.position ?? 0, lastPos.current[listId] ?? 0) || undefined, undefined)
+    lastPos.current[listId] = position
     const { data: row, error: e } = await sb().from('cards')
-      .insert({ project_id: projectId, list_id: listId, title, position: posBetween(arr[arr.length - 1]?.position, undefined), created_by: me })
+      .insert({ project_id: projectId, list_id: listId, title, position, created_by: me })
       .select().single()
     if (e) return toast(errMsg(e), 'err')
     upsert('cards', row)
@@ -273,7 +276,7 @@ function usePresence(projectId: string, me: string) {
 /* ---------------------------------- Lista ---------------------------------- */
 function ListColumn({ id, name, cards, count, canEdit, first, last, onRename, onDelete, onClearDone, onSortDue, onMove, onAdd, renderCard }: {
   id: string; name: string; cards: Card[]; count: number; canEdit: boolean; first: boolean; last: boolean
-  onRename: (n: string) => void; onDelete: () => void; onClearDone: () => void; onSortDue: () => void; onMove: (d: -1 | 1) => void; onAdd: (t: string) => void
+  onRename: (n: string) => void; onDelete: () => void; onClearDone: () => void; onSortDue: () => void; onMove: (d: -1 | 1) => void; onAdd: (t: string) => void | Promise<void>
   renderCard: (c: Card) => React.ReactNode
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: `list-${id}`, data: { type: 'list', listId: id } })
@@ -321,7 +324,8 @@ function ListColumn({ id, name, cards, count, canEdit, first, last, onRename, on
       </div>
       {canEdit && !collapsed && (adding ? (
         <form className="add-card-form" onSubmit={e => { e.preventDefault(); if (title.trim()) { onAdd(title.trim()); setTitle('') } }}>
-          <textarea autoFocus rows={2} value={title} placeholder="Título de la tarjeta…" onChange={e => setTitle(e.target.value)}
+          <textarea autoFocus rows={2} value={title} placeholder="Título de la tarjeta… (pega varias líneas para crear varias)" onChange={e => setTitle(e.target.value)}
+            onPaste={e => { const lines = e.clipboardData.getData('text').split(/\r?\n/).map(l => l.replace(/^\s*(?:[-*•]|\d+[.)]|\[[ xX]?\])\s*/, '').trim()).filter(Boolean); if (lines.length > 1 && lines.length <= 50) { e.preventDefault(); void (async () => { for (const l of lines) await onAdd(l.slice(0, 300)) })(); setAdding(false) } }}
             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); (e.target as HTMLTextAreaElement).form?.requestSubmit() } if (e.key === 'Escape') setAdding(false) }} />
           <div className="row">
             <button className="btn primary sm" type="submit">Añadir</button>

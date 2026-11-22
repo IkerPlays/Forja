@@ -64,7 +64,7 @@ export default function Gamepad3DS({ onChange, keyboard = true }: { onChange: (s
 
   const Btn = ({ n, label, cls }: { n: BtnName; label: string; cls?: string }) => (
     <button type="button" className={cn('pad-btn', cls, (pressed & bit(n)) !== 0 && 'on')}
-      onPointerDown={e => { e.currentTarget.setPointerCapture(e.pointerId); setBtn(n, true) }}
+      onPointerDown={e => { e.currentTarget.setPointerCapture(e.pointerId); setBtn(n, true); try { navigator.vibrate?.(8) } catch { /* noop */ } }}
       onPointerUp={() => setBtn(n, false)} onPointerCancel={() => setBtn(n, false)}
       onContextMenu={e => e.preventDefault()}>{label}</button>
   )

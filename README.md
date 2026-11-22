@@ -19,6 +19,7 @@ El hub personal de tu estudio, para la **tablet** y el **PC**. Un solo sitio par
 * **Recordatorios de vencimiento** (tarjetas tuyas que vencen en 24 h o vencidas) y ayuda de atajos con `?`.
 * **Tablero**: listas plegables, atajos de fecha (hoy/mañana/+1 sem), eliminar completadas y contador de adjuntos. Filtro y orden en Proyectos y Juegos, y **temporizador de enfoque** en el panel.
 * Enlaces directos a tarjetas (`?card=`), color de acento, exportar fechas a `.ics`, ordenar una lista por fecha, aviso sin conexión y pantalla de error recuperable.
+* **Tablero**: pega varias líneas en «Añadir tarjeta» para crear varias a la vez; búsqueda con **recientes**; vibración en el mando web.
 * **Notificaciones**: tareas que te asignan, comentarios en tus tarjetas y mensajes del chat (también avisos del sistema).
 * **Pantalla remota**: captura de pantalla y grabación en WebM; pantalla + cámara + micrófono; 3DS por NTR con táctil.
 * **PC**: bloquear, suspender, reiniciar y apagar a distancia (opcional, desactivado por defecto).
