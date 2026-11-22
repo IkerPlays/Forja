@@ -6,14 +6,15 @@ import { P2PAnswerer } from './p2p'
 import { NtrSource } from './ntrSource'
 import type { Device } from './types'
 
-export interface HostState { running: boolean; deviceId?: string; hostname?: string; viewers: number; consoles: number; log: string[]; error?: string }
+export interface ConsoleInfo { id: string; name: string; ip: string; port: number }
+export interface HostState { running: boolean; deviceId?: string; hostname?: string; viewers: number; consoles: number; list: ConsoleInfo[]; log: string[]; error?: string }
 
 /**
  * Anfitrión de la app de escritorio: registra este PC como dispositivo, atiende sus órdenes de archivos,
  * comparte la pantalla bajo demanda, aplica el ratón/teclado remotos y enlaza las 3DS de tu red local (mando por UDP).
  */
 class DesktopHost {
-  state: HostState = { running: false, viewers: 0, consoles: 0, log: [] }
+  state: HostState = { running: false, viewers: 0, consoles: 0, list: [], log: [] }
   private listeners = new Set<() => void>()
   private agent?: DesktopPcAgent
   private link?: Link
@@ -138,7 +139,29 @@ class DesktopHost {
       this.ds.set(id, { link, off, sharer, key: `${w.ip}:${w.port}` })
       this.log(hasIp ? `3DS «${w.d.name}» enlazada (${w.ip}): mando y pantalla` : `3DS «${w.d.name}» sin IP: pon su IP en la ficha`)
     }
-    this.patch({ consoles: [...wanted.values()].filter(w => w.ip).length })
+    this.patch({ consoles: [...wanted.values()].filter(w => w.ip).length, list: [...wanted.values()].map(w => ({ id: w.d.id, name: w.d.name, ip: w.ip, port: w.port })) })
+  }
+
+  /** Diagnóstico: manda un paquete neutro a la 3DS y dice si el sistema pudo enviarlo. */
+  async testPad(c: ConsoleInfo): Promise<{ ok: boolean; msg: string }> {
+    if (!c.ip) return { ok: false, msg: 'Falta la IP de la 3DS (ponla en su ficha).' }
+    desktop!.padSend(c.ip, c.port, { b: 0, cx: 0, cy: 0, sx: 0, sy: 0, t: null })
+    await new Promise(r => setTimeout(r, 400))
+    const st = await desktop!.padStatus()
+    return st.error ? { ok: false, msg: `El sistema no pudo enviar a ${c.ip}:${c.port}: ${st.error}` } : { ok: true, msg: `Paquete enviado a ${c.ip}:${c.port}. Si la 3DS tiene Input Redirection activo, ya lo recibe.` }
+  }
+
+  /** Diagnóstico: pide imagen a NTR unos segundos y cuenta fotogramas. */
+  async testNtr(c: ConsoleInfo): Promise<{ ok: boolean; msg: string }> {
+    if (!c.ip) return { ok: false, msg: 'Falta la IP de la 3DS (ponla en su ficha).' }
+    const src = new NtrSource(c.ip)
+    try {
+      const stream = await src.start()
+      await new Promise(r => setTimeout(r, 1500))
+      const frames = src.frames
+      stream.getTracks().forEach(t => t.stop())
+      return { ok: true, msg: `Recibiendo imagen de ${c.ip}: ${frames} fotogramas en 1,5 s.` }
+    } catch (e) { src.stop(); return { ok: false, msg: e instanceof Error ? e.message : String(e) } }
   }
 
   /** Tras cambiar ajustes (pantalla visible, etc.) */

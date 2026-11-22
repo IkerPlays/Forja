@@ -11,6 +11,8 @@ const link = p.c.find((n: any) => n.t === 'a'); assert.equal(link.href, 'https:/
 const ul = b.find(x => x.t === 'ul') as any; assert.deepEqual(ul.items.map((i: any) => i.check), [undefined, true, false])
 assert.equal((b.find(x => x.t === 'ol') as any).items.length, 2); assert.equal(b.find(x => x.t === 'quote') != null, true)
 assert.equal((b.find(x => x.t === 'code') as any).v, 'linea1\nlinea2'); assert.equal(b[b.length - 1].t, 'hr')
+const mention = parseInline('Hola @[Iker Demo], revisa esto @[Ana]'); assert.deepEqual(mention.filter((n: any) => n.t === 'mention').map((n: any) => n.v), ['Iker Demo', 'Ana'])
+assert.ok(parseInline('correo a@b.com y @sin_corchetes').every((n: any) => n.t !== 'mention'))
 // seguridad: nada de javascript: ni HTML
 const evil = parseInline('[x](javascript:alert(1)) <img src=x onerror=alert(1)> [ok](https://a.com)')
 assert.ok(!evil.some((n: any) => n.t === 'a' && /javascript/.test(n.href))); assert.ok(evil.some((n: any) => n.t === 'a' && n.href === 'https://a.com'))

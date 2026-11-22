@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Loader2, LogOut, Upload } from 'lucide-react'
 import { sb, clearConfig, configFromEnv, SUPABASE_URL } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
@@ -16,6 +16,8 @@ export default function Settings() {
   const [color, setColor] = useState(profile?.color ?? COLORS[4])
   const [busy, setBusy] = useState(false)
   const [studioName, setStudioName] = useState('')
+  const [installable, setInstallable] = useState(() => !!(window as unknown as { __installPrompt?: unknown }).__installPrompt)
+  useEffect(() => { const f = () => setInstallable(true); window.addEventListener('forja:installable', f); return () => window.removeEventListener('forja:installable', f) }, [])
   const [theme, setThemeSel] = useState<ThemePref>(getTheme())
 
   async function save(e: React.FormEvent) {
@@ -68,6 +70,10 @@ export default function Settings() {
       <section className="panel stack">
         <h2>Apariencia</h2>
         <div className="seg">{(['auto', 'dark', 'light'] as ThemePref[]).map(t => <button key={t} className={theme === t ? 'on' : ''} onClick={() => { setTheme(t); setThemeSel(t) }}>{t === 'auto' ? 'Automático' : t === 'dark' ? 'Oscuro' : 'Claro'}</button>)}</div>
+        {installable && <button className="btn" onClick={async () => {
+          const ev = (window as unknown as { __installPrompt?: { prompt: () => Promise<void> } }).__installPrompt
+          await ev?.prompt(); setInstallable(false)
+        }}>Instalar Forja como aplicación</button>}
         <p className="muted small">Atajos: <kbd>Ctrl</kbd>+<kbd>K</kbd> o <kbd>/</kbd> abren la búsqueda global desde cualquier pantalla.</p>
       </section>
 

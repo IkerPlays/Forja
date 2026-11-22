@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { CalendarDays, CheckSquare, Tag, Trash2, Users, Send, Plus, X } from 'lucide-react'
+import { CalendarDays, CheckSquare, Tag, Trash2, Users, Send, Plus, X, Paperclip, Download, Copy, ArrowRightLeft, FileText, Loader2 } from 'lucide-react'
+import MentionInput from './MentionInput'
 import { sb } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import type { BoardData } from '../lib/board'
@@ -7,7 +8,7 @@ import { useProjectPeople } from '../lib/people'
 import { profileName, useProfiles } from '../lib/profiles'
 import { Avatar, Modal, useToast } from './ui'
 import { Markdown } from '../lib/markdown'
-import { cn, errMsg, fromInputDate, timeAgo, toInputDate, posBetween } from '../lib/util'
+import { cn, errMsg, fromInputDate, timeAgo, toInputDate, posBetween, formatBytes, uid } from '../lib/util'
 
 interface Props {
   board: BoardData; cardId: string; canEdit: boolean
@@ -26,6 +27,9 @@ export default function CardModal({ board, cardId, canEdit, upsert, remove, onCl
   const [desc, setDesc] = useState(card.description)
   const [picker, setPicker] = useState<null | 'people' | 'labels'>(null)
   const [editDesc, setEditDesc] = useState(!card.description)
+  const [urls, setUrls] = useState<Record<string, string>>({})
+  const [uploading, setUploading] = useState(false)
+  const [dragOver, setDragOver] = useState(false)
   const [newItem, setNewItem] = useState('')
   const [comment, setComment] = useState('')
   const commentsEnd = useRef<HTMLDivElement>(null)
@@ -40,6 +44,63 @@ export default function CardModal({ board, cardId, canEdit, upsert, remove, onCl
   const myAssignees = board.assignees.filter(a => a.card_id === cardId)
   const myLabels = board.cardLabels.filter(l => l.card_id === cardId)
   const list = board.lists.find(l => l.id === card.list_id)
+  const atts = useMemo(() => board.attachments.filter(a => a.card_id === cardId).sort((a, b) => a.created_at.localeCompare(b.created_at)), [board.attachments, cardId])
+
+  // Vistas previas de las imágenes (enlaces firmados de 1 hora)
+  const imgPaths = atts.filter(a => a.mime.startsWith('image/')).map(a => a.path).join('|')
+  useEffect(() => {
+    if (!imgPaths) return
+    let alive = true
+    void sb().storage.from('attachments').createSignedUrls(imgPaths.split('|'), 3600).then(({ data }) => {
+      if (alive && data) setUrls(Object.fromEntries(data.filter(d => d.signedUrl && d.path).map(d => [d.path as string, d.signedUrl as string])))
+    })
+    return () => { alive = false }
+  }, [imgPaths])
+
+  async function addFiles(files: File[]) {
+    if (!canEdit || !files.length) return
+    setUploading(true)
+    for (const f of files) {
+      if (f.size > 10 * 1024 * 1024) { toast(`${f.name}: máximo 10 MB por adjunto`, 'err'); continue }
+      const name = f.name || `pegado-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.png`
+      const path = `${card.project_id}/${cardId}/${uid()}-${name.replace(/[^\w.\- ]/g, '_')}`
+      const up = await sb().storage.from('attachments').upload(path, f, { contentType: f.type || 'application/octet-stream' })
+      if (up.error) { toast(errMsg(up.error), 'err'); continue }
+      const { data, error } = await sb().from('card_attachments').insert({ card_id: cardId, project_id: card.project_id, name, path, size: f.size, mime: f.type || 'application/octet-stream', created_by: me }).select().single()
+      if (error) { toast(errMsg(error), 'err'); void sb().storage.from('attachments').remove([path]); continue }
+      upsert('attachments', data)
+    }
+    setUploading(false)
+  }
+  async function openAttachment(a: { path: string; name: string }) {
+    const { data, error } = await sb().storage.from('attachments').createSignedUrl(a.path, 60, { download: a.name })
+    if (error || !data) return toast(errMsg(error), 'err')
+    const link = document.createElement('a'); link.href = data.signedUrl; link.download = a.name; document.body.appendChild(link); link.click(); link.remove()
+  }
+  async function deleteAttachment(a: { id: string; path: string }) {
+    remove('attachments', a.id)
+    await sb().storage.from('attachments').remove([a.path])
+    await sb().from('card_attachments').delete().eq('id', a.id)
+  }
+
+  // Mover y duplicar
+  async function moveTo(listId: string) {
+    if (listId === card.list_id) return
+    const col = board.cards.filter(c => c.list_id === listId).sort((a, b) => a.position - b.position)
+    await patch({ list_id: listId, position: posBetween(col[col.length - 1]?.position, undefined) })
+    toast('Tarjeta movida')
+  }
+  async function duplicate() {
+    const col = board.cards.filter(c => c.list_id === card.list_id).sort((a, b) => a.position - b.position)
+    const { data, error } = await sb().from('cards').insert({ project_id: card.project_id, list_id: card.list_id, title: `${card.title} (copia)`.slice(0, 300), description: card.description, due_date: card.due_date, position: posBetween(col[col.length - 1]?.position, undefined), created_by: me }).select().single()
+    if (error) return toast(errMsg(error), 'err')
+    upsert('cards', data)
+    if (items.length) {
+      const { data: rows } = await sb().from('card_checklist').insert(items.map((i, k) => ({ card_id: data.id, project_id: card.project_id, text: i.text, done: false, position: (k + 1) * 1000 }))).select()
+      rows?.forEach(r => upsert('checklist', r))
+    }
+    toast('Tarjeta duplicada')
+  }
 
   useEffect(() => { commentsEnd.current?.scrollIntoView({ block: 'nearest' }) }, [comments.length])
 
@@ -121,7 +182,7 @@ export default function CardModal({ board, cardId, canEdit, upsert, remove, onCl
         {list && <small className="muted">en la lista <strong>{list.name}</strong></small>}
       </span>
     }>
-      <div className="card-modal">
+      <div className="card-modal" onPaste={e => { const files = Array.from(e.clipboardData?.files ?? []); if (files.length) { e.preventDefault(); void addFiles(files) } }}>
         <div className="card-main">
           <div className="chips-row">
             {myAssignees.map(a => <span key={a.id} className="chip"><Avatar profile={profile(a.user_id)} size={18} /> {profileName(profile(a.user_id))}</span>)}
@@ -152,6 +213,27 @@ export default function CardModal({ board, cardId, canEdit, upsert, remove, onCl
             </form>
           )}
 
+          <h4><Paperclip size={15} /> Adjuntos {atts.length > 0 && <small className="muted">{atts.length}</small>}</h4>
+          <div className={cn('attach-zone', dragOver && 'over')}
+            onDragOver={e => { if (canEdit) { e.preventDefault(); setDragOver(true) } }} onDragLeave={() => setDragOver(false)}
+            onDrop={e => { e.preventDefault(); setDragOver(false); void addFiles(Array.from(e.dataTransfer.files)) }}>
+            <ul className="attachments">
+              {atts.map(a => (
+                <li key={a.id}>
+                  {a.mime.startsWith('image/') && urls[a.path] ? <img src={urls[a.path]} alt={a.name} onClick={() => void openAttachment(a)} /> : <span className="file-ico"><FileText size={22} /></span>}
+                  <div className="att-info"><strong title={a.name}>{a.name}</strong><small className="muted">{formatBytes(a.size)} · {timeAgo(a.created_at)}</small></div>
+                  <button className="icon-btn sm" onClick={() => void openAttachment(a)} aria-label="Descargar"><Download size={15} /></button>
+                  {canEdit && <button className="icon-btn sm" onClick={() => void deleteAttachment(a)} aria-label="Quitar adjunto"><Trash2 size={14} /></button>}
+                </li>
+              ))}
+            </ul>
+            {canEdit && (
+              <label className="btn sm">{uploading ? <Loader2 size={14} className="spin" /> : <Plus size={14} />} Añadir archivo
+                <input type="file" multiple hidden onChange={e => { void addFiles(Array.from(e.target.files ?? [])); e.target.value = '' }} /></label>
+            )}
+            {canEdit && <small className="muted"> o arrastra / pega una imagen (máx. 10 MB)</small>}
+          </div>
+
           <h4>Comentarios</h4>
           <div className="comments">
             {comments.map(c => (
@@ -169,7 +251,7 @@ export default function CardModal({ board, cardId, canEdit, upsert, remove, onCl
             <div ref={commentsEnd} />
           </div>
           <form className="inline-form" onSubmit={sendComment}>
-            <input value={comment} onChange={e => setComment(e.target.value)} placeholder="Escribe un comentario…" />
+            <MentionInput value={comment} onChange={setComment} people={people.all} placeholder="Escribe un comentario… (@ para mencionar)" />
             <button className="btn primary sm" disabled={!comment.trim()}><Send size={14} /></button>
           </form>
         </div>
@@ -216,6 +298,11 @@ export default function CardModal({ board, cardId, canEdit, upsert, remove, onCl
             )}
           </div>
 
+          {canEdit && (
+            <label className="side-field"><span><ArrowRightLeft size={14} /> Mover a</span>
+              <select value={card.list_id} onChange={e => void moveTo(e.target.value)}>{[...board.lists].sort((a, b) => a.position - b.position).map(l => <option key={l.id} value={l.id}>{l.name}</option>)}</select></label>
+          )}
+          {canEdit && <button className="btn block" onClick={() => void duplicate()}><Copy size={15} /> Duplicar tarjeta</button>}
           {canEdit && <button className="btn danger block" onClick={deleteCard}><Trash2 size={15} /> Eliminar</button>}
         </aside>
       </div>

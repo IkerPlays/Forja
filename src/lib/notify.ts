@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react'
 import { sb } from './supabase'
 
-export interface Notice { id: string; at: number; kind: 'assign' | 'comment' | 'message'; title: string; body: string; href: string; read: boolean }
+export interface Notice { id: string; at: number; kind: 'assign' | 'comment' | 'message' | 'mention'; title: string; body: string; href: string; read: boolean }
 
 class NoticeStore {
   items: Notice[] = []
@@ -44,6 +44,9 @@ export async function askNotificationPermission() { return typeof Notification =
 /** Suscripciones en tiempo real: tareas asignadas a ti, comentarios en tus tarjetas y mensajes de proyectos. */
 export function startNotifications(uid: string) {
   notices.load(uid)
+  let myName = ''
+  void sb().from('profiles').select('display_name').eq('id', uid).maybeSingle().then(({ data }) => { myName = data?.display_name ?? '' })
+  const mentions = (body: string) => !!myName && body.includes(`@[${myName}]`)
   const lastMsg = new Map<string, number>()
   const here = (href: string) => location.pathname === href && document.visibilityState === 'visible'
   const ch = sb().channel(`notify-${uid}`)
@@ -59,27 +62,29 @@ export function startNotifications(uid: string) {
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'card_comments' }, async p => {
       const c = p.new as { card_id: string; user_id: string; body: string; project_id: string }
       if (c.user_id === uid) return
+      const mentioned = mentions(c.body)
       const [{ data: card }, { data: mine }, { data: who }] = await Promise.all([
         sb().from('cards').select('title, created_by').eq('id', c.card_id).maybeSingle(),
         sb().from('card_assignees').select('id').eq('card_id', c.card_id).eq('user_id', uid).limit(1),
         sb().from('profiles').select('display_name').eq('id', c.user_id).maybeSingle(),
       ])
-      if (!card || !(card.created_by === uid || (mine && mine.length))) return
+      if (!card || !(mentioned || card.created_by === uid || (mine && mine.length))) return
       const href = `/tasks/${c.project_id}`
       if (here(href)) return
-      notices.add({ kind: 'comment', title: `${who?.display_name ?? 'Alguien'} comentó en «${card.title}»`, body: c.body.slice(0, 120), href })
+      notices.add({ kind: mentioned ? 'mention' : 'comment', title: mentioned ? `${who?.display_name ?? 'Alguien'} te mencionó en «${card.title}»` : `${who?.display_name ?? 'Alguien'} comentó en «${card.title}»`, body: c.body.replace(/@\[([^\]]+)\]/g, '@$1').slice(0, 120), href })
     })
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'project_messages' }, async p => {
       const m = p.new as { user_id: string; body: string; project_id: string }
       if (m.user_id === uid) return
       const href = `/tasks/${m.project_id}`
-      if (here(href) || Date.now() - (lastMsg.get(m.project_id) ?? 0) < 30_000) return
+      const mentioned = mentions(m.body)
+      if (here(href) || (!mentioned && Date.now() - (lastMsg.get(m.project_id) ?? 0) < 30_000)) return
       lastMsg.set(m.project_id, Date.now())
       const [{ data: who }, { data: pr }] = await Promise.all([
         sb().from('profiles').select('display_name').eq('id', m.user_id).maybeSingle(),
         sb().from('projects').select('name').eq('id', m.project_id).maybeSingle(),
       ])
-      notices.add({ kind: 'message', title: `${who?.display_name ?? 'Alguien'} en el chat de ${pr?.name ?? 'un proyecto'}`, body: m.body.slice(0, 120), href })
+      notices.add({ kind: mentioned ? 'mention' : 'message', title: mentioned ? `${who?.display_name ?? 'Alguien'} te mencionó en ${pr?.name ?? 'un chat'}` : `${who?.display_name ?? 'Alguien'} en el chat de ${pr?.name ?? 'un proyecto'}`, body: m.body.replace(/@\[([^\]]+)\]/g, '@$1').slice(0, 120), href })
     })
     .subscribe()
   return () => { void sb().removeChannel(ch) }

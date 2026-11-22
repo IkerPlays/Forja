@@ -1,5 +1,8 @@
 import { useState } from 'react'
-import { Download, Loader2, Mail, Plus, Tag, Trash2, UserPlus } from 'lucide-react'
+import { Copy, Download, Loader2, Mail, Plus, Tag, Trash2, UserPlus } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
+import { boardToImport } from '../lib/templates'
+import { importTrello } from '../lib/trelloImport'
 import { sb } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import { useStudio } from '../context/StudioContext'
@@ -25,6 +28,9 @@ export default function ProjectSettings({ board, canEdit, upsert, remove, onClos
   const [email, setEmail] = useState('')
   const [role, setRole] = useState<ProjectRole>('editor')
   const [busy, setBusy] = useState(false)
+  const nav = useNavigate()
+  const [dupCards, setDupCards] = useState(true)
+  const [dupBusy, setDupBusy] = useState(false)
 
   async function save(values: Record<string, unknown>) {
     const { error } = await sb().from('projects').update(values).eq('id', project.id)
@@ -130,8 +136,16 @@ export default function ProjectSettings({ board, canEdit, upsert, remove, onClos
           )}
         </section>
 
-        <section>
-          <button className="btn" onClick={() => exportProject(board)}><Download size={15} /> Exportar proyecto (JSON)</button>
+        <section className="stack">
+          <div className="row wrap">
+            <button className="btn" onClick={() => exportProject(board)}><Download size={15} /> Exportar proyecto (JSON)</button>
+            {inStudio && <button className="btn" disabled={dupBusy} onClick={async () => {
+              setDupBusy(true)
+              try { const d = boardToImport(board, dupCards); const id = await importTrello({ ...d, description: project.description, skipped: { lists: 0, cards: 0 } }, project.studio_id, session!.user.id, project.color); toast('Proyecto duplicado'); onClose(); nav(`/tasks/${id}`) }
+              catch (e) { toast(errMsg(e), 'err') } finally { setDupBusy(false) }
+            }}>{dupBusy ? <Loader2 size={14} className="spin" /> : <Copy size={15} />} Duplicar proyecto</button>}
+          </div>
+          {inStudio && <label className="row" style={{ gap: 6 }}><input type="checkbox" checked={dupCards} onChange={e => setDupCards(e.target.checked)} /> <span className="small">Incluir tarjetas (si no, solo listas y etiquetas: sirve como plantilla)</span></label>}
         </section>
 
         {inStudio && (

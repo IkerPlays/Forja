@@ -19,6 +19,9 @@ El hub personal de tu estudio, para la **tablet** y el **PC**. Un solo sitio par
 * **Notificaciones**: tareas que te asignan, comentarios en tus tarjetas y mensajes del chat (también avisos del sistema).
 * **Pantalla remota**: captura de pantalla y grabación en WebM; pantalla + cámara + micrófono; 3DS por NTR con táctil.
 * **PC**: bloquear, suspender, reiniciar y apagar a distancia (opcional, desactivado por defecto).
+* **Adjuntos** en tarjetas (subir, arrastrar o pegar capturas; miniaturas y descarga) y **@menciones** con autocompletado en comentarios y chat (avisan a la persona).
+* **Plantillas** de proyecto (videojuego, sprint, lanzamiento), **duplicar proyecto** y **duplicar / mover tarjetas**.
+* **PC**: diagnóstico de cada 3DS (prueba de mando y NTR) y registro de actividad; la web se puede **instalar como app** (PWA).
 * Tema **automático / claro / oscuro** y gráfico de tareas completadas.
 
 ## Cómo está montado

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { sb } from './supabase'
-import type { Card, CardAssignee, CardLabel, ChecklistItem, Comment, Label, List, Message, Project } from './types'
+import type { Attachment, Card, CardAssignee, CardLabel, ChecklistItem, Comment, Label, List, Message, Project } from './types'
 
 export interface BoardData {
   project: Project | null
@@ -11,11 +11,12 @@ export interface BoardData {
   assignees: CardAssignee[]
   checklist: ChecklistItem[]
   comments: Comment[]
+  attachments: Attachment[]
   messages: Message[]
 }
 
 const EMPTY: BoardData = {
-  project: null, lists: [], cards: [], labels: [], cardLabels: [], assignees: [], checklist: [], comments: [], messages: [],
+  project: null, lists: [], cards: [], labels: [], cardLabels: [], assignees: [], checklist: [], comments: [], attachments: [], messages: [],
 }
 
 type Key = Exclude<keyof BoardData, 'project'>
@@ -27,6 +28,7 @@ const TABLES: { table: string; key: Key }[] = [
   { table: 'card_assignees', key: 'assignees' },
   { table: 'card_checklist', key: 'checklist' },
   { table: 'card_comments', key: 'comments' },
+  { table: 'card_attachments', key: 'attachments' },
   { table: 'project_messages', key: 'messages' },
 ]
 

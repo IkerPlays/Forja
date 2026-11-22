@@ -9,6 +9,7 @@ import { sb } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import { useBoard } from '../lib/board'
 import { useProfiles } from '../lib/profiles'
+import { useProjectPeople } from '../lib/people'
 import { Avatar, AvatarStack, Empty, Spinner, useToast } from '../components/ui'
 import CardModal from '../components/CardModal'
 import ChatPanel from '../components/ChatPanel'
@@ -37,6 +38,7 @@ export default function Board() {
   const [canEdit, setCanEdit] = useState(true)
   const [gameId, setGameId] = useState<string | null>(null)
   const online = usePresence(projectId, me)
+  const people = useProjectPeople(project)
   const profile = useProfiles([...online, ...assignees.map(a => a.user_id)])
 
   const sensors = useSensors(
@@ -216,7 +218,7 @@ export default function Board() {
           </DragOverlay>
         </DndContext>
 
-        {chat && <ChatPanel projectId={projectId} messages={data.messages} upsert={upsert} onClose={() => setChat(false)} />}
+        {chat && <ChatPanel projectId={projectId} messages={data.messages} upsert={upsert} people={people.all} onClose={() => setChat(false)} />}
       </div>
 
       {openCard && cards.find(c => c.id === openCard) && (

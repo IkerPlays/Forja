@@ -32,6 +32,7 @@ export interface Label { id: string; project_id: string; name: string; color: st
 export interface CardLabel { id: string; card_id: string; label_id: string; project_id: string }
 export interface CardAssignee { id: string; card_id: string; user_id: string; project_id: string }
 export interface ChecklistItem { id: string; card_id: string; project_id: string; text: string; done: boolean; position: number }
+export interface Attachment { id: string; card_id: string; project_id: string; name: string; path: string; size: number; mime: string; created_by: string | null; created_at: string }
 export interface Comment { id: string; card_id: string; project_id: string; user_id: string; body: string; created_at: string; edited_at: string | null }
 export interface Message { id: string; project_id: string; user_id: string; body: string; created_at: string }
 export interface Activity {

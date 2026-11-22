@@ -9,6 +9,7 @@ import type { Project, ProjectStats } from '../lib/types'
 import { COLORS, errMsg } from '../lib/util'
 import { parseTrello, type TrelloImport } from '../lib/trello'
 import { importTrello } from '../lib/trelloImport'
+import { TEMPLATES } from '../lib/templates'
 
 export default function Projects() {
   const { session } = useAuth()
@@ -121,17 +122,19 @@ function CreateProject({ studioId, userId, onClose, onCreated }: {
   const [name, setName] = useState('')
   const [desc, setDesc] = useState('')
   const [color, setColor] = useState(COLORS[0])
+  const [tpl, setTpl] = useState('blank')
   const [busy, setBusy] = useState(false)
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
     setBusy(true)
-    const { data, error } = await sb().from('projects')
-      .insert({ studio_id: studioId, name: name.trim(), description: desc.trim(), color, created_by: userId })
-      .select('id').single()
-    setBusy(false)
-    if (error) return toast(errMsg(error), 'err')
-    onCreated(data!.id)
+    try {
+      const built = TEMPLATES.find(t => t.id === tpl)?.build()
+      if (built) { onCreated(await importTrello({ ...built, name: name.trim(), description: desc.trim(), skipped: { lists: 0, cards: 0 } }, studioId, userId, color)); return }
+      const { data, error } = await sb().from('projects').insert({ studio_id: studioId, name: name.trim(), description: desc.trim(), color, created_by: userId }).select('id').single()
+      if (error) return toast(errMsg(error), 'err')
+      onCreated(data!.id)
+    } catch (er) { toast(errMsg(er), 'err') } finally { setBusy(false) }
   }
 
   return (
@@ -139,6 +142,11 @@ function CreateProject({ studioId, userId, onClose, onCreated }: {
       <form onSubmit={submit} className="stack">
         <Field label="Nombre"><input value={name} onChange={e => setName(e.target.value)} required maxLength={120} autoFocus /></Field>
         <Field label="Descripción (opcional)"><textarea value={desc} onChange={e => setDesc(e.target.value)} rows={3} /></Field>
+        <Field label="Plantilla">
+          <div className="tpl-grid">
+            {TEMPLATES.map(t => <button type="button" key={t.id} className={'tpl' + (tpl === t.id ? ' on' : '')} onClick={() => setTpl(t.id)}><strong>{t.name}</strong><small className="muted">{t.description}</small></button>)}
+          </div>
+        </Field>
         <Field label="Color"><ColorPicker value={color} onChange={setColor} colors={COLORS} /></Field>
         <button className="btn primary" disabled={busy || !name.trim()}>{busy && <Loader2 size={14} className="spin" />} Crear</button>
       </form>

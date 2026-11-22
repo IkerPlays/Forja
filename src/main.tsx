@@ -8,6 +8,9 @@ import { applyTheme } from './lib/theme'
 
 applyTheme()
 
+// Chrome/Edge/Android ofrecen «instalar» con este evento: se guarda para un botón en Ajustes
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); (window as unknown as { __installPrompt?: Event }).__installPrompt = e; window.dispatchEvent(new Event('forja:installable')) })
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <BrowserRouter>

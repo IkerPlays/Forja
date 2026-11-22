@@ -6,10 +6,12 @@ import { profileName, useProfiles } from '../lib/profiles'
 import { Avatar, useToast } from './ui'
 import { cn, errMsg, timeAgo } from '../lib/util'
 import { Markdown } from '../lib/markdown'
+import MentionInput from './MentionInput'
+import type { Profile } from '../lib/types'
 import type { Message } from '../lib/types'
 
-export default function ChatPanel({ projectId, messages, upsert, onClose }: {
-  projectId: string; messages: Message[]; upsert: (k: "messages", r: any) => void; onClose: () => void
+export default function ChatPanel({ projectId, messages, upsert, onClose, people = [] }: {
+  projectId: string; messages: Message[]; upsert: (k: "messages", r: any) => void; onClose: () => void; people?: Profile[]
 }) {
   const { session } = useAuth()
   const me = session!.user.id
@@ -50,7 +52,7 @@ export default function ChatPanel({ projectId, messages, upsert, onClose }: {
         <div ref={end} />
       </div>
       <form onSubmit={send} className="inline-form">
-        <input value={text} onChange={e => setText(e.target.value)} placeholder="Escribe un mensaje…" />
+        <MentionInput value={text} onChange={setText} people={people} placeholder="Escribe un mensaje… (@ para mencionar)" />
         <button className="btn primary sm" disabled={!text.trim()} aria-label="Enviar"><Send size={15} /></button>
       </form>
     </aside>

@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { RefreshCw, FolderPlus, HardDrive, Monitor, MousePointer2, Power, Radio, Trash2, Eye, Video } from 'lucide-react'
 import { desktop, type DesktopSettings } from '../lib/native'
 import { useHostState } from '../components/DesktopHostMount'
-import { desktopHost } from '../lib/desktopHost'
+import { desktopHost, type ConsoleInfo } from '../lib/desktopHost'
 import { PageHeader, StatusDot, useToast } from '../components/ui'
 import { errMsg } from '../lib/util'
 
@@ -13,6 +13,20 @@ function Toggle({ on, onChange, label, hint, danger }: { on: boolean; onChange: 
       <div><strong>{label}</strong>{hint && <small className={danger ? 'error' : 'muted'}>{hint}</small>}</div>
       <input type="checkbox" role="switch" checked={on} onChange={e => onChange(e.target.checked)} />
     </label>
+  )
+}
+
+function ConsoleRow({ c }: { c: ConsoleInfo }) {
+  const [res, setRes] = useState<{ ok: boolean; msg: string } | null>(null)
+  const [busy, setBusy] = useState('')
+  const run = async (kind: 'pad' | 'ntr') => { setBusy(kind); setRes(null); setRes(await (kind === 'pad' ? desktopHost.testPad(c) : desktopHost.testNtr(c))); setBusy('') }
+  return (
+    <div className="person">
+      <Radio size={18} /><div><strong>{c.name}</strong><small className={c.ip ? 'muted' : 'error'}>{c.ip ? `${c.ip} · puerto del mando ${c.port}` : 'Sin IP: escríbela en su ficha (3DS → Jugar)'}</small>
+        {res && <small className={res.ok ? 'ok' : 'error'}>{res.msg}</small>}</div>
+      <button className="btn sm" disabled={!!busy || !c.ip} onClick={() => void run('pad')}>{busy === 'pad' ? '…' : 'Probar mando'}</button>
+      <button className="btn sm" disabled={!!busy || !c.ip} onClick={() => void run('ntr')}>{busy === 'ntr' ? '…' : 'Probar pantalla'}</button>
+    </div>
   )
 }
 
@@ -117,6 +131,14 @@ export default function ThisPc() {
       </section>
 
       <section className="panel stack">
+        <h2><Radio size={17} /> Consolas 3DS enlazadas</h2>
+        <div className="console-diag">
+          {host.list.map(c => <ConsoleRow key={c.id} c={c} />)}
+          {!host.list.length && <p className="muted small">Aún no hay ninguna 3DS en el estudio (3DS → Añadir).</p>}
+        </div>
+      </section>
+
+      <section className="panel stack">
         <h2><RefreshCw size={17} /> Actualizaciones</h2>
         <p className="muted small">Versión {info.version}{info.shellVersion && info.shellVersion !== info.version ? ` (instalador ${info.shellVersion})` : ''}. Forja busca actualizaciones sola al abrirse y cada 6 horas; si hay una, se descarga y se aplica al reiniciar (en segundo plano, sola).</p>
         <div className="row wrap">
@@ -129,6 +151,11 @@ export default function ThisPc() {
           <button className="btn" onClick={() => void desktop!.applyUpdate()}>Reiniciar Forja</button>
         </div>
         <p className="muted small">Se actualiza la lógica (archivos, control, puente 3DS…). La interfaz web se actualiza siempre sola. Si cambia el propio motor (Electron), se avisa de instalar el nuevo instalador.</p>
+      </section>
+
+      <section className="panel stack">
+        <details><summary>Registro de actividad</summary>
+          <pre className="log">{host.log.length ? host.log.join('\n') : 'Sin actividad todavía.'}</pre></details>
       </section>
 
       <section className="panel stack">

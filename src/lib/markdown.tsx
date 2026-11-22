@@ -4,7 +4,7 @@ import type { ReactNode } from 'react'
  * Markdown mínimo y SEGURO (sin dangerouslySetInnerHTML): títulos, **negrita**, *cursiva*, `código`, bloques ```,
  * listas (con casillas - [ ]), citas, enlaces http(s) y URLs sueltas.
  */
-export type Inline = { t: 'text'; v: string } | { t: 'b' | 'i' | 'code'; v: string } | { t: 'a'; v: string; href: string }
+export type Inline = { t: 'text'; v: string } | { t: 'b' | 'i' | 'code' | 'mention'; v: string } | { t: 'a'; v: string; href: string }
 export type Block =
   | { t: 'h'; level: 1 | 2 | 3; c: Inline[] }
   | { t: 'p'; c: Inline[] }
@@ -17,7 +17,7 @@ const safeUrl = (u: string) => (/^https?:\/\/[^\s<>"']+$/i.test(u) ? u : null)
 
 export function parseInline(src: string): Inline[] {
   const out: Inline[] = []
-  const re = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|(\*[^*\n]+\*)|(\[[^\]\n]+\]\(https?:\/\/[^\s)]+\))|(https?:\/\/[^\s<>"']+)/g
+  const re = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|(\*[^*\n]+\*)|(\[[^\]\n]+\]\(https?:\/\/[^\s)]+\))|(https?:\/\/[^\s<>"']+)|(@\[[^\]\n]{1,60}\])/g
   let last = 0, m: RegExpExecArray | null
   while ((m = re.exec(src))) {
     if (m.index > last) out.push({ t: 'text', v: src.slice(last, m.index) })
@@ -26,6 +26,7 @@ export function parseInline(src: string): Inline[] {
     else if (m[2]) out.push({ t: 'b', v: tok.slice(2, -2) })
     else if (m[3]) out.push({ t: 'i', v: tok.slice(1, -1) })
     else if (m[4]) { const mm = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(tok)!; const href = safeUrl(mm[2]); out.push(href ? { t: 'a', v: mm[1], href } : { t: 'text', v: tok }) }
+    else if (m[6]) out.push({ t: 'mention', v: tok.slice(2, -1) })
     else { const trail = /[.,;:!?)]+$/.exec(tok)?.[0] ?? ''; const url = trail ? tok.slice(0, -trail.length) : tok; const href = safeUrl(url); out.push(href ? { t: 'a', v: url, href } : { t: 'text', v: tok }); if (trail) out.push({ t: 'text', v: trail }) }
     last = m.index + tok.length
   }
@@ -72,6 +73,7 @@ function inline(c: Inline[]): ReactNode[] {
       case 'b': return <strong key={i}>{n.v}</strong>
       case 'i': return <em key={i}>{n.v}</em>
       case 'code': return <code key={i}>{n.v}</code>
+      case 'mention': return <span key={i} className="mention">@{n.v}</span>
       case 'a': return <a key={i} href={n.href} target="_blank" rel="noopener noreferrer nofollow">{n.v}</a>
       default: return <span key={i}>{n.v}</span>
     }

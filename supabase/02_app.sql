@@ -136,6 +136,22 @@ create table if not exists public.card_checklist (
 );
 create index if not exists card_checklist_project_idx on public.card_checklist (project_id);
 
+
+-- Adjuntos de tarjetas (el archivo vive en Storage, bucket "attachments": <proyecto>/<tarjeta>/<id>-<nombre>)
+create table if not exists public.card_attachments (
+  id         uuid primary key default gen_random_uuid(),
+  card_id    uuid not null references public.cards(id) on delete cascade,
+  project_id uuid not null references public.projects(id) on delete cascade,
+  name       text not null check (char_length(name) between 1 and 255),
+  path       text not null,
+  size       bigint not null default 0 check (size >= 0),
+  mime       text not null default 'application/octet-stream',
+  created_by uuid references public.profiles(id) on delete set null,
+  created_at timestamptz not null default now()
+);
+create index if not exists card_attachments_card_idx on public.card_attachments (card_id);
+create index if not exists card_attachments_project_idx on public.card_attachments (project_id);
+
 create table if not exists public.card_comments (
   id         uuid primary key default gen_random_uuid(),
   card_id    uuid not null references public.cards(id) on delete cascade,
@@ -387,7 +403,7 @@ end $$;
 do $$
 declare t text;
 begin
-  foreach t in array array['card_labels','card_assignees','card_checklist','card_comments'] loop
+  foreach t in array array['card_labels','card_assignees','card_checklist','card_comments','card_attachments'] loop
     execute format('drop trigger if exists %I on public.%I', t || '_sync_project', t);
     execute format('create trigger %I before insert on public.%I for each row execute function public.sync_project_from_card()',
                    t || '_sync_project', t);
@@ -733,7 +749,7 @@ declare t text;
 begin
   foreach t in array array[
     'studios','studio_members','studio_invites','projects','project_members','project_invites',
-    'lists','cards','project_labels','card_labels','card_assignees','card_checklist','card_comments',
+    'lists','cards','project_labels','card_labels','card_assignees','card_checklist','card_comments','card_attachments',
     'project_messages','activity','devices','device_commands','games','device_links','device_pairings','notes'
   ] loop
     execute format('alter table public.%I enable row level security', t);
@@ -824,6 +840,16 @@ begin
                    t || ': borrar', t);
   end loop;
 end $$;
+
+
+-- Adjuntos: ver = acceso al proyecto; subir/borrar = poder editarlo
+drop policy if exists "card_attachments: ver" on public.card_attachments;
+create policy "card_attachments: ver" on public.card_attachments for select to authenticated using (public.can_access_project(project_id));
+drop policy if exists "card_attachments: crear" on public.card_attachments;
+create policy "card_attachments: crear" on public.card_attachments for insert to authenticated
+  with check (public.can_edit_project(project_id) and created_by = auth.uid());
+drop policy if exists "card_attachments: borrar" on public.card_attachments;
+create policy "card_attachments: borrar" on public.card_attachments for delete to authenticated using (public.can_edit_project(project_id));
 
 -- Comentarios y chat: cualquiera con acceso (incluido lector) puede escribir
 drop policy if exists "card_comments: ver" on public.card_comments;
@@ -934,7 +960,7 @@ declare t text;
 begin
   foreach t in array array[
     'lists','cards','project_labels','card_labels','card_assignees','card_checklist','card_comments',
-    'project_messages','activity','projects','project_members','studio_members','games','devices','device_commands','notes'
+    'project_messages','activity','projects','project_members','studio_members','games','devices','device_commands','notes','card_attachments'
   ] loop
     if not exists (select 1 from pg_publication_tables
                    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = t) then
@@ -957,7 +983,8 @@ create policy "forja realtime: escribir" on realtime.messages for insert to auth
 insert into storage.buckets (id, name, public, file_size_limit)
 values ('covers', 'covers', true, 5242880),
        ('avatars', 'avatars', true, 2097152),
-       ('transfers', 'transfers', false, 52428800)
+       ('transfers', 'transfers', false, 52428800),
+       ('attachments', 'attachments', false, 10485760)
 on conflict (id) do update set public = excluded.public, file_size_limit = excluded.file_size_limit;
 
 create or replace function public.storage_studio_allowed(object_name text)
@@ -1012,3 +1039,28 @@ drop policy if exists "forja transfers: todo" on storage.objects;
 create policy "forja transfers: todo" on storage.objects for all to authenticated
   using (bucket_id = 'transfers' and public.storage_studio_allowed(name))
   with check (bucket_id = 'transfers' and public.storage_studio_allowed(name));
+
+-- attachments (privado, 10 MB por archivo): carpeta = id del proyecto
+create or replace function public.storage_project_allowed(object_name text, write boolean)
+returns boolean language plpgsql stable security definer set search_path = public as $$
+declare
+  v_first text := (string_to_array(object_name, '/'))[1];
+begin
+  if v_first !~ '^[0-9a-f-]{36}$' then return false; end if;
+  if write then return public.can_edit_project(v_first::uuid); end if;
+  return public.can_access_project(v_first::uuid);
+exception when others then
+  return false;
+end $$;
+revoke all on function public.storage_project_allowed(text, boolean) from public, anon;
+grant execute on function public.storage_project_allowed(text, boolean) to authenticated;
+
+drop policy if exists "forja attachments: leer" on storage.objects;
+create policy "forja attachments: leer" on storage.objects for select to authenticated
+  using (bucket_id = 'attachments' and public.storage_project_allowed(name, false));
+drop policy if exists "forja attachments: escribir" on storage.objects;
+create policy "forja attachments: escribir" on storage.objects for insert to authenticated
+  with check (bucket_id = 'attachments' and public.storage_project_allowed(name, true));
+drop policy if exists "forja attachments: borrar" on storage.objects;
+create policy "forja attachments: borrar" on storage.objects for delete to authenticated
+  using (bucket_id = 'attachments' and public.storage_project_allowed(name, true));
