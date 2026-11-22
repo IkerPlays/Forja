@@ -22,6 +22,8 @@ export default function Projects() {
   const [trello, setTrello] = useState<TrelloImport | null>(null)
   const [importing, setImporting] = useState(false)
   const [withArchived, setWithArchived] = useState(false)
+  const [pq, setPq] = useState('')
+  const [psort, setPsort] = useState<'recent' | 'name' | 'pending'>('recent')
   const [rawTrello, setRawTrello] = useState<unknown>(null)
 
   const load = useCallback(async () => {
@@ -45,8 +47,14 @@ export default function Projects() {
   if (!projects) return <Spinner />
 
   const myStudioIds = new Set(studios.map(s => s.id))
-  const own = projects.filter(p => p.studio_id === active?.id)
-  const shared = projects.filter(p => !myStudioIds.has(p.studio_id))
+  const arrange = (l: Project[]) => {
+    const f = l.filter(p => !pq || p.name.toLowerCase().includes(pq.toLowerCase()))
+    if (psort === 'name') return [...f].sort((a, b) => a.name.localeCompare(b.name, 'es'))
+    if (psort === 'pending') return [...f].sort((a, b) => ((stats[b.id]?.total ?? 0) - (stats[b.id]?.done ?? 0)) - ((stats[a.id]?.total ?? 0) - (stats[a.id]?.done ?? 0)))
+    return f
+  }
+  const own = arrange(projects.filter(p => p.studio_id === active?.id))
+  const shared = arrange(projects.filter(p => !myStudioIds.has(p.studio_id)))
 
   const card = (p: Project) => {
     const st = stats[p.id]
@@ -77,6 +85,15 @@ export default function Projects() {
             }} /></label>
           <button className="btn primary" onClick={() => setCreating(true)}><Plus size={16} /> Nuevo proyecto</button>
         </>} />
+
+      {projects.length > 3 && (
+        <div className="filters">
+          <input value={pq} onChange={e => setPq(e.target.value)} placeholder="Filtrar proyectos…" aria-label="Filtrar proyectos" />
+          <select value={psort} onChange={e => setPsort(e.target.value as 'recent' | 'name' | 'pending')} aria-label="Ordenar">
+            <option value="recent">Más recientes</option><option value="name">Nombre (A–Z)</option><option value="pending">Más tareas pendientes</option>
+          </select>
+        </div>
+      )}
 
       {isMember && (own.length ? <div className="grid">{own.map(card)}</div> : (
         <Empty icon={<KanbanSquare size={28} />} title="Aún no tienes proyectos"

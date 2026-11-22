@@ -39,8 +39,14 @@ export default function Games() {
     return () => { void sb().removeChannel(ch) }
   }, [active, load])
 
-  const shown = useMemo(() => (games ?? []).filter(g =>
-    (!status || g.status === status) && (!q || g.name.toLowerCase().includes(q.toLowerCase()))), [games, q, status])
+  const [sort, setSort] = useState<'recent' | 'name' | 'status'>('recent')
+  const shown = useMemo(() => {
+    const list = (games ?? []).filter(g =>
+      (!status || g.status === status) && (!q || g.name.toLowerCase().includes(q.toLowerCase())))
+    if (sort === 'name') return [...list].sort((a, b) => a.name.localeCompare(b.name, 'es'))
+    if (sort === 'status') return [...list].sort((a, b) => a.status.localeCompare(b.status) || a.name.localeCompare(b.name, 'es'))
+    return [...list].sort((a, b) => b.created_at.localeCompare(a.created_at))
+  }, [games, q, status, sort])
 
   if (!active || !games) return <Spinner />
 
@@ -58,6 +64,11 @@ export default function Games() {
           <select value={status} onChange={e => setStatus(e.target.value)} aria-label="Estado">
             <option value="">Todos los estados</option>
             {Object.entries(STATUSES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+          </select>
+          <select value={sort} onChange={e => setSort(e.target.value as 'recent' | 'name' | 'status')} aria-label="Ordenar">
+            <option value="recent">Más recientes</option>
+            <option value="name">Nombre (A–Z)</option>
+            <option value="status">Por estado</option>
           </select>
         </div>
       )}

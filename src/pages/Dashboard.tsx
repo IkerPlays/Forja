@@ -8,6 +8,7 @@ import { profileName, useProfiles } from '../lib/profiles'
 import { STATUSES } from '../lib/games'
 import type { Activity, Card, Device, Game, Project } from '../lib/types'
 import { Avatar, PageHeader, Spinner, StatusDot, useTick } from '../components/ui'
+import FocusTimer from '../components/FocusTimer'
 import { formatDate, isOnline, timeAgo } from '../lib/util'
 
 type MyCard = Card & { projects: Pick<Project, 'id' | 'name' | 'color'> | null }
@@ -111,6 +112,8 @@ export default function Dashboard() {
             {!acts.length && <li className="muted">Todavía no hay actividad.</li>}
           </ul>
         </section>
+
+        <FocusTimer />
 
         <section className="panel">
           <h2>Tareas completadas · 14 días</h2>

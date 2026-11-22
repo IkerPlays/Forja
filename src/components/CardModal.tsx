@@ -266,6 +266,14 @@ export default function CardModal({ board, cardId, canEdit, upsert, remove, onCl
             <span><CalendarDays size={14} /> Fecha límite</span>
             <input type="date" value={toInputDate(card.due_date)} disabled={!canEdit}
               onChange={e => patch({ due_date: fromInputDate(e.target.value) })} />
+            {canEdit && (
+              <span className="quick-dates">
+                {([['Hoy', 0], ['Mañana', 1], ['+1 sem', 7]] as const).map(([l, d]) => (
+                  <button key={l} type="button" className="chip" onClick={() => { const t = new Date(); t.setDate(t.getDate() + d); patch({ due_date: fromInputDate(`${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`) }) }}>{l}</button>
+                ))}
+                {card.due_date && <button type="button" className="chip" onClick={() => patch({ due_date: null })}>Quitar</button>}
+              </span>
+            )}
           </label>
 
           <div className="side-field">

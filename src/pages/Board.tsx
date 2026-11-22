@@ -4,7 +4,7 @@ import {
   DndContext, DragOverlay, PointerSensor, TouchSensor, useDraggable, useDroppable, useSensor, useSensors,
   closestCorners, type DragEndEvent, type DragStartEvent,
 } from '@dnd-kit/core'
-import { ArrowLeft, MessageSquare, Plus, Users, CalendarDays, CheckSquare, MessageCircle, MoreHorizontal, Check, Settings2, Gamepad2, Search, X } from 'lucide-react'
+import { ArrowLeft, MessageSquare, Plus, Users, CalendarDays, CheckSquare, MessageCircle, Paperclip, MoreHorizontal, Check, Settings2, Gamepad2, Search, X } from 'lucide-react'
 import { sb } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import { useBoard } from '../lib/board'
@@ -147,6 +147,13 @@ export default function Board() {
     const { error: e } = await sb().from('lists').delete().eq('id', id)
     if (e) toast(errMsg(e), 'err')
   }
+  async function clearDone(id: string) {
+    const done = cards.filter(c => c.list_id === id && c.completed)
+    if (!done.length || !confirm(`¿Eliminar ${done.length} tarjeta(s) completada(s) de esta lista?`)) return
+    done.forEach(c => remove('cards', c.id))
+    const { error: e } = await sb().from('cards').delete().in('id', done.map(c => c.id))
+    if (e) toast(errMsg(e), 'err')
+  }
   async function moveList(id: string, dir: -1 | 1) {
     const i = sortedLists.findIndex(l => l.id === id)
     const j = i + dir
@@ -197,12 +204,13 @@ export default function Board() {
               <ListColumn key={l.id} id={l.id} name={l.name} canEdit={canEdit}
                 cards={byList.get(l.id) ?? []} count={(byList.get(l.id) ?? []).length}
                 first={idx === 0} last={idx === sortedLists.length - 1}
-                onRename={n => renameList(l.id, n)} onDelete={() => deleteList(l.id)} onMove={d => moveList(l.id, d)}
+                onRename={n => renameList(l.id, n)} onDelete={() => deleteList(l.id)} onClearDone={() => clearDone(l.id)} onMove={d => moveList(l.id, d)}
                 onAdd={t => addCard(l.id, t)}
                 renderCard={c => (
                   <CardTile card={c} labels={labelsOf(c.id)}
                     checklist={checklist.filter(i => i.card_id === c.id)}
                     comments={comments.filter(x => x.card_id === c.id).length}
+                    attachments={data.attachments.filter(x => x.card_id === c.id).length}
                     people={assignees.filter(a => a.card_id === c.id).map(a => profile(a.user_id))}
                     onOpen={() => setOpenCard(c.id)} draggable={canEdit} />
                 )} />
@@ -245,9 +253,9 @@ function usePresence(projectId: string, me: string) {
 }
 
 /* ---------------------------------- Lista ---------------------------------- */
-function ListColumn({ id, name, cards, count, canEdit, first, last, onRename, onDelete, onMove, onAdd, renderCard }: {
+function ListColumn({ id, name, cards, count, canEdit, first, last, onRename, onDelete, onClearDone, onMove, onAdd, renderCard }: {
   id: string; name: string; cards: Card[]; count: number; canEdit: boolean; first: boolean; last: boolean
-  onRename: (n: string) => void; onDelete: () => void; onMove: (d: -1 | 1) => void; onAdd: (t: string) => void
+  onRename: (n: string) => void; onDelete: () => void; onClearDone: () => void; onMove: (d: -1 | 1) => void; onAdd: (t: string) => void
   renderCard: (c: Card) => React.ReactNode
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: `list-${id}`, data: { type: 'list', listId: id } })
@@ -255,11 +263,14 @@ function ListColumn({ id, name, cards, count, canEdit, first, last, onRename, on
   const [title, setTitle] = useState('')
   const [menu, setMenu] = useState(false)
   const [editing, setEditing] = useState(false)
+  const ckey = `forja.collapsed.${id}`
+  const [collapsed, setCollapsed] = useState(() => { try { return localStorage.getItem(ckey) === '1' } catch { return false } })
+  const toggle = () => setCollapsed(c => { const n = !c; try { localStorage.setItem(ckey, n ? '1' : '0') } catch { /* noop */ } return n })
   const [nm, setNm] = useState(name)
   useEffect(() => setNm(name), [name])
 
   return (
-    <section className={cn('list', isOver && 'over')}>
+    <section className={cn('list', isOver && 'over', collapsed && 'collapsed')}>
       <header className="list-head">
         {editing ? (
           <input className="list-title-input" value={nm} autoFocus onChange={e => setNm(e.target.value)}
@@ -269,6 +280,7 @@ function ListColumn({ id, name, cards, count, canEdit, first, last, onRename, on
           <h3 onClick={() => canEdit && setEditing(true)}>{name}</h3>
         )}
         <span className="count">{count}</span>
+        <button className="icon-btn sm" onClick={toggle} aria-label={collapsed ? 'Expandir lista' : 'Plegar lista'}>{collapsed ? '▸' : '▾'}</button>
         {canEdit && (
           <div className="menu-wrap">
             <button className="icon-btn sm" onClick={() => setMenu(m => !m)} aria-label="Opciones de lista"><MoreHorizontal size={16} /></button>
@@ -277,17 +289,18 @@ function ListColumn({ id, name, cards, count, canEdit, first, last, onRename, on
                 <button onClick={() => setEditing(true)}>Renombrar</button>
                 {!first && <button onClick={() => onMove(-1)}>Mover a la izquierda</button>}
                 {!last && <button onClick={() => onMove(1)}>Mover a la derecha</button>}
+                {cards.some(c => c.completed) && <button onClick={onClearDone}>Eliminar completadas</button>}
                 <button className="danger" onClick={onDelete}>Eliminar lista</button>
               </div>
             )}
           </div>
         )}
       </header>
-      <div className="list-cards" ref={setNodeRef}>
+      <div className="list-cards" ref={setNodeRef} hidden={collapsed}>
         {cards.map(c => <div key={c.id}>{renderCard(c)}</div>)}
         {!cards.length && <div className="list-empty">Suelta tarjetas aquí</div>}
       </div>
-      {canEdit && (adding ? (
+      {canEdit && !collapsed && (adding ? (
         <form className="add-card-form" onSubmit={e => { e.preventDefault(); if (title.trim()) { onAdd(title.trim()); setTitle('') } }}>
           <textarea autoFocus rows={2} value={title} placeholder="Título de la tarjeta…" onChange={e => setTitle(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); (e.target as HTMLTextAreaElement).form?.requestSubmit() } if (e.key === 'Escape') setAdding(false) }} />
@@ -304,8 +317,8 @@ function ListColumn({ id, name, cards, count, canEdit, first, last, onRename, on
 }
 
 /* --------------------------------- Tarjeta --------------------------------- */
-function CardTile({ card, labels, checklist, comments, people, onOpen, draggable }: {
-  card: Card; labels: Label[]; checklist: { done: boolean }[]; comments: number
+function CardTile({ card, labels, checklist, comments, attachments = 0, people, onOpen, draggable }: {
+  card: Card; labels: Label[]; checklist: { done: boolean }[]; comments: number; attachments?: number
   people: ReturnType<ReturnType<typeof useProfiles>>[]; onOpen: () => void; draggable: boolean
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: card.id, data: { type: 'card', listId: card.list_id }, disabled: !draggable })
@@ -327,6 +340,7 @@ function CardTile({ card, labels, checklist, comments, people, onOpen, draggable
         {card.description && <span className="meta" title="Tiene descripción">≡</span>}
         {checklist.length > 0 && <span className={cn('meta', doneItems === checklist.length && 'ok')}><CheckSquare size={13} /> {doneItems}/{checklist.length}</span>}
         {comments > 0 && <span className="meta"><MessageCircle size={13} /> {comments}</span>}
+        {attachments > 0 && <span className="meta"><Paperclip size={13} /> {attachments}</span>}
         <div className="spacer" />
         {people.length > 0 && <AvatarStack profiles={people} size={22} max={3} />}
       </div>

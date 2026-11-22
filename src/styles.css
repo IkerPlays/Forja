@@ -258,3 +258,9 @@ kbd { background: var(--panel2); border: 1px solid var(--line); border-bottom-wi
 
 .shortcuts { display: grid; grid-template-columns: auto 1fr; gap: 8px 16px; margin: 0; } .shortcuts dt { white-space: nowrap; } .shortcuts dd { margin: 0; color: var(--muted, #8b95a5); }
 kbd { background: var(--panel-2, #1e2530); border: 1px solid var(--border, #2b3441); border-radius: 5px; padding: 1px 6px; font: inherit; font-size: .85em; }
+
+.quick-dates { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; } .quick-dates .chip { cursor: pointer; }
+.list.collapsed { min-width: 0; opacity: .85; } .list.collapsed .list-head { opacity: .9; }
+.list-cards[hidden] { display: none !important; }
+
+.focus-time { font-size: 2.6rem; font-weight: 700; font-variant-numeric: tabular-nums; margin: 6px 0 12px; }
