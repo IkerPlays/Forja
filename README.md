@@ -21,6 +21,7 @@ El hub personal de tu estudio, para la **tablet** y el **PC**. Un solo sitio par
 * Enlaces directos a tarjetas (`?card=`), color de acento, exportar fechas a `.ics`, ordenar una lista por fecha, aviso sin conexión y pantalla de error recuperable.
 * **Tablero**: pega varias líneas en «Añadir tarjeta» para crear varias a la vez; búsqueda con **recientes**; vibración en el mando web.
 * **Escritorio**: si el instalador es antiguo y le faltan funciones (p. ej. pantalla de la 3DS), se avisa con un enlace al último instalador en vez de fallar con un error técnico.
+* **Teclado de la 3DS** en el mando web/escritorio: teclas que tocan el teclado de sistema de la 3DS (con calibración) y envío de texto completo.
 * **Notificaciones**: tareas que te asignan, comentarios en tus tarjetas y mensajes del chat (también avisos del sistema).
 * **Pantalla remota**: captura de pantalla y grabación en WebM; pantalla + cámara + micrófono; 3DS por NTR con táctil.
 * **PC**: bloquear, suspender, reiniciar y apagar a distancia (opcional, desactivado por defecto).

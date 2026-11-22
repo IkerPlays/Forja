@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { bit, BTN, KEYMAP, mergePad, NEUTRAL, readGamepad, STICK_KEYS, type BtnName, type PadState } from '../lib/pad'
 import { cn } from '../lib/util'
+import ScreenKeyboard3DS from './ScreenKeyboard3DS'
 
 /**
  * Mando virtual de la 3DS: botones táctiles (multitoque), Circle Pad, C-Stick,
@@ -99,6 +100,7 @@ export default function Gamepad3DS({ onChange, keyboard = true }: { onChange: (s
           <Stick label="C-Stick" small onMove={(x, y) => { screen.current = { ...screen.current, sx: x, sy: y }; emit() }} />
         </div>
       </div>
+      <ScreenKeyboard3DS onTouch={t => { screen.current = { ...screen.current, t }; emit() }} />
       {keyboard && <p className="muted small pad-hint">
         Teclado: flechas = cruceta · X A / Z B / S X / A Y · Q L / W R · Enter Start · Retroceso Select · IJKL = Circle Pad. También funciona un mando USB/Bluetooth.
       </p>}
