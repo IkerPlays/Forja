@@ -38,11 +38,24 @@ const fsApi = roots.api(getRoots)
 let win = null, tray = null, quitting = false, padSender = null, relayHandle = null, relayError = ''
 const iconPath = path.join(ctx.shellDir, 'icon.png')
 
+/** El preload viaja dentro del núcleo (se actualiza solo): así un instalador antiguo también recibe las funciones nuevas. */
+function preloadPath() {
+  const shellCopy = path.join(ctx.shellDir, 'preload.js')
+  try {
+    const src = typeof __PRELOAD__ !== 'undefined' ? __PRELOAD__ : fs.readFileSync(shellCopy, 'utf8')
+    const file = path.join(app.getPath('userData'), 'forja-preload.js')
+    let cur = ''
+    try { cur = fs.readFileSync(file, 'utf8') } catch { /* primera vez */ }
+    if (cur !== src) fs.writeFileSync(file, src)
+    return file
+  } catch { return shellCopy }
+}
+
 function createWindow() {
   win = new BrowserWindow({
     width: 1280, height: 820, minWidth: 420, minHeight: 600, show: !startHidden, backgroundColor: '#0f1115', title: 'Forja',
     icon: iconPath, autoHideMenuBar: true,
-    webPreferences: { preload: path.join(ctx.shellDir, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false },
+    webPreferences: { preload: preloadPath(), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false },
   })
   win.removeMenu()
   win.loadURL(settings.webUrl).catch(() => {})

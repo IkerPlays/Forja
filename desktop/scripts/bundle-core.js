@@ -10,6 +10,7 @@ fs.mkdirSync(out, { recursive: true })
 esbuild.buildSync({
   entryPoints: [path.join(__dirname, '..', 'src', 'core', 'index.js')],
   bundle: true, platform: 'node', format: 'cjs', target: 'node20',
+  define: { __PRELOAD__: JSON.stringify(fs.readFileSync(path.join(__dirname, '..', 'src', 'preload.js'), 'utf8')) },
   external: ['electron', '@nut-tree-fork/nut-js'], outfile: path.join(out, 'desktop-core.js'), logLevel: 'error',
 })
 const buf = fs.readFileSync(path.join(out, 'desktop-core.js'))
