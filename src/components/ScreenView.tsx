@@ -94,7 +94,11 @@ export default function ScreenView({ link, kind, remoteControl, onTouch3ds }: { 
     const ox = r.left + (r.width - cw) / 2, oy = r.top + (r.height - ch) / 2
     return { x: clamp((e.clientX - ox) / cw), y: clamp((e.clientY - oy) / ch) }
   }
-  const send = (p: Record<string, unknown>) => { if (control && remoteControl) void link.input(p) }
+  const send = (p: Record<string, unknown>) => {
+    if (!control || !remoteControl) return
+    if (p.k === 'mouse' && p.a === 'move') link.inputCoalesced('mouse-move', p, 40)
+    else { link.flushInput(); void link.input(p) }   // pulsar/soltar/teclas: sin retraso y detrás del movimiento pendiente
+  }
   const CODES: Record<string, string> = { ' ': 'Space', '.': 'Period', ',': 'Comma', '-': 'Minus', '=': 'Equal', '/': 'Slash', ';': 'Semicolon', "'": 'Quote' }
   const typeChar = (ch: string) => {
     const code = /^[a-z]$/i.test(ch) ? 'Key' + ch.toUpperCase() : /^\d$/.test(ch) ? 'Digit' + ch : CODES[ch]

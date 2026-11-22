@@ -1,6 +1,7 @@
 import type { RealtimeChannel } from '@supabase/supabase-js'
 import { sb } from './supabase'
 import { uid } from './util'
+import { Coalescer } from './coalesce'
 import type { DeviceCommand } from './types'
 
 /* ------------------------------------------------------------------ *
@@ -72,7 +73,7 @@ export class CommandClient {
 export interface Signal { from: string; to?: string; meta?: Record<string, string>; kind: 'join' | 'offer' | 'answer' | 'ice' | 'leave' | 'fs-offer' | 'fs-answer' | 'fs-ice'; data?: any }
 export type Role = 'viewer' | 'sharer' | 'bridge' | 'files'
 
-export type Peer = { id: string; roles: Role[] }
+export type Peer = { id: string; roles: Role[]; meta?: Record<string, unknown> }
 
 /** Un canal Realtime por dispositivo, compartido por todos los Link abiertos (el cliente no admite dos canales con el mismo tema). */
 interface Shared {
@@ -102,8 +103,8 @@ function openShared(deviceId: string): Shared {
   })
   ch.on('broadcast', { event: 'input' }, ({ payload }) => { sh.inputCbs.forEach(cb => cb(payload)) })
   ch.on('presence', { event: 'sync' }, () => {
-    const state = ch.presenceState() as Record<string, { roles?: Role[] }[]>
-    const peers: Peer[] = Object.entries(state).map(([id, metas]) => ({ id, roles: metas[0]?.roles ?? [] }))
+    const state = ch.presenceState() as Record<string, ({ roles?: Role[] } & Record<string, unknown>)[]>
+    const peers: Peer[] = Object.entries(state).map(([id, metas]) => { const { roles, ...meta } = metas[0] ?? {}; return { id, roles: (roles as Role[]) ?? [], meta } })
     sh.presenceCbs.forEach(cb => cb(peers))
   })
   sh.ready = new Promise((resolve, reject) => {
@@ -121,17 +122,21 @@ function openShared(deviceId: string): Shared {
 
 async function trackRoles(sh: Shared) {
   const roles = [...new Set([...sh.refs].flatMap(l => l.roles))]
-  if (sh.subscribed) await sh.ch.track({ roles })
+  const meta = Object.assign({}, ...[...sh.refs].map(l => l.meta))
+  if (sh.subscribed) await sh.ch.track({ roles, ...meta })
 }
 
 export class Link {
   readonly roles: Role[]
+  readonly meta: Record<string, unknown>
   private sh: Shared
+  private co = new Coalescer<Record<string, unknown>>(p => { void this.input(p) })
   private mine = { signal: new Set<(s: Signal) => void>(), input: new Set<(m: any) => void>(), presence: new Set<(p: Peer[]) => void>() }
   ready: Promise<void>
 
-  constructor(private deviceId: string, roles: Role | Role[]) {
+  constructor(private deviceId: string, roles: Role | Role[], meta: Record<string, unknown> = {}) {
     this.roles = Array.isArray(roles) ? roles : [roles]
+    this.meta = meta
     this.sh = openShared(deviceId)
     this.sh.refs.add(this)
     this.ready = this.sh.ready.then(() => trackRoles(this.sh))
@@ -152,7 +157,16 @@ export class Link {
     this.sh.inputCbs.forEach(cb => { if (!this.mine.input.has(cb)) cb(payload) })
     return this.sh.ch.send({ type: 'broadcast', event: 'input', payload })
   }
+  /**
+   * Realtime limita los eventos por segundo (se descartan los sobrantes). Para el mando y el ratón se envía como mucho
+   * uno cada `gapMs` y SIEMPRE el último estado, así nunca se pierde un "soltar".
+   */
+  inputCoalesced(key: string, payload: Record<string, unknown>, gapMs = 40) { this.co.push(key, payload, gapMs) }
+  /** Envía ya lo pendiente (para conservar el orden: p. ej. mover el ratón antes de pulsar). */
+  flushInput() { this.co.flush() }
+
   close() {
+    this.co.dispose()
     this.mine.signal.forEach(cb => this.sh.signalCbs.delete(cb))
     this.mine.input.forEach(cb => this.sh.inputCbs.delete(cb))
     this.mine.presence.forEach(cb => this.sh.presenceCbs.delete(cb))

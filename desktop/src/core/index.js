@@ -143,6 +143,7 @@ const bounds = () => {
 ipcMain.on('forja:input:mouse', (_e, m) => { if (settings.allowInput) void input.mouse(m, bounds()) })
 ipcMain.on('forja:input:key', (_e, m) => { if (settings.allowInput) void input.key(m) })
 ipcMain.on('forja:pad', (_e, ip, port, state) => { if (!padSender) padSender = new PadSender(); padSender.update(String(ip), port, state) })
+handle('pad:status', () => ({ sent: padSender ? padSender.sent : 0, error: padSender ? padSender.lastError : '' }))
 
 /* ---------------- Energía ---------------- */
 handle('power:do', async action => {

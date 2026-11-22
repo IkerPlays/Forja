@@ -19,7 +19,7 @@ class DesktopHost {
   private link?: Link
   private sharer?: ScreenSharer
   private p2p?: P2PAnswerer
-  private ds = new Map<string, { link: Link; off: () => void; sharer: ScreenSharer; key: string }>()
+  private ds = new Map<string, { link: Link; off: () => void; sharer?: ScreenSharer; key: string }>()
   private dsChannel?: ReturnType<ReturnType<typeof sb>['channel']>
   private studioId?: string
   private userId?: string
@@ -100,30 +100,45 @@ class DesktopHost {
     await this.link.ready.catch(e => this.patch({ error: e instanceof Error ? e.message : String(e) }))
   }
 
-  /** Las 3DS del estudio con IP (la de su ficha o la que informa Forja3DS) reciben el mando por UDP y emiten su pantalla por NTR. */
+  /**
+   * Todas las 3DS del estudio se enlazan (con o sin IP) para que la web sepa que este PC está disponible.
+   * Con IP (la de su ficha o la que informa Forja3DS) reciben el mando por UDP y emiten su pantalla por NTR.
+   */
   private async syncConsoles() {
     if (!this.studioId) return
     const { data } = await sb().from('devices').select('*').eq('studio_id', this.studioId).eq('kind', '3ds')
     const wanted = new Map<string, { d: Device; ip: string; port: number }>()
     for (const d of (data ?? []) as Device[]) {
       const cfg = d.config as { ip?: string; input_port?: number }
-      const ip = (cfg.ip || (d.info as { ip?: string }).ip || '').trim()
-      if (ip) wanted.set(d.id, { d, ip, port: cfg.input_port || 4950 })
+      wanted.set(d.id, { d, ip: (cfg.ip || (d.info as { ip?: string }).ip || '').trim(), port: cfg.input_port || 4950 })
     }
     for (const [id, h] of this.ds) {
       const w = wanted.get(id)
-      if (!w || h.key !== `${w.ip}:${w.port}`) { h.off(); h.sharer.stop(); h.link.close(); this.ds.delete(id) }
+      if (!w || h.key !== `${w.ip}:${w.port}`) { h.off(); h.sharer?.stop(); h.link.close(); this.ds.delete(id) }
     }
+    const pc = this.state.hostname ?? ''
     for (const [id, w] of wanted) {
       if (this.ds.has(id)) continue
-      const link = new Link(id, ['bridge', 'sharer'])
-      const off = link.onInput(m => { if (m?.k === 'pad') desktop!.padSend(w.ip, w.port, m.s) })
+      const hasIp = !!w.ip
+      const link = new Link(id, hasIp ? ['bridge', 'sharer'] : ['bridge'], hasIp ? { pc, ip: w.ip, port: w.port } : { pc, noip: true })
+      let lastAck = 0
+      const ack = async (force = false) => {
+        if (!force && Date.now() - lastAck < 800) return
+        lastAck = Date.now()
+        const st = await desktop!.padStatus().catch(() => ({ sent: 0, error: '' }))
+        void link.input({ k: 'pad-ack', pc, ip: w.ip, port: w.port, sent: st.sent, err: st.error })
+      }
+      const off = link.onInput(m => {
+        if (!hasIp) return
+        if (m?.k === 'pad') { desktop!.padSend(w.ip, w.port, m.s); void ack() }
+        else if (m?.k === 'pad-test') { desktop!.padSend(w.ip, w.port, { b: 0, cx: 0, cy: 0, sx: 0, sy: 0, t: null }); void ack(true) }
+      })
       // La pantalla se pide por NTR/NTR-HR solo cuando alguien mira
-      const sharer = new ScreenSharer(link, async (): Promise<Sources> => ({ screen: await new NtrSource(w.ip).start() }), () => {})
+      const sharer = hasIp ? new ScreenSharer(link, async (): Promise<Sources> => ({ screen: await new NtrSource(w.ip).start() }), () => {}) : undefined
       this.ds.set(id, { link, off, sharer, key: `${w.ip}:${w.port}` })
-      this.log(`3DS «${w.d.name}» enlazada (${w.ip}): mando y pantalla`)
+      this.log(hasIp ? `3DS «${w.d.name}» enlazada (${w.ip}): mando y pantalla` : `3DS «${w.d.name}» sin IP: pon su IP en la ficha`)
     }
-    this.patch({ consoles: this.ds.size })
+    this.patch({ consoles: [...wanted.values()].filter(w => w.ip).length })
   }
 
   /** Tras cambiar ajustes (pantalla visible, etc.) */
@@ -135,7 +150,7 @@ class DesktopHost {
     this.sharer?.stop(); this.sharer = undefined
     this.p2p?.stop(); this.p2p = undefined
     this.link?.close(); this.link = undefined
-    for (const h of this.ds.values()) { h.off(); h.sharer.stop(); h.link.close() }
+    for (const h of this.ds.values()) { h.off(); h.sharer?.stop(); h.link.close() }
     this.ds.clear()
     if (this.dsChannel) { void sb().removeChannel(this.dsChannel); this.dsChannel = undefined }
     this.patch({ running: false, deviceId: undefined, viewers: 0, consoles: 0 })

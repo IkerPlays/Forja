@@ -30,8 +30,22 @@ const relay = require('../src/core/relay')
   await api.mkdir('/Games/J1/sub'); await api.rename('/Games/J1/n.bin', '/Games/J1/m.bin'); await api.remove('/Games/J1/m.bin')
   await assert.rejects(api.remove('/Games'), /raíz/)
 
-  assert.equal(buildPacket({ b: 0, cx: 0, cy: 0, sx: 0, sy: 0, t: null }).readUInt32LE(0), 0xfff)
-  assert.equal(buildPacket({ b: 1, cx: 0, cy: 0, sx: 0, sy: 0, t: null }).readUInt32LE(0), 0xffe)
+  const N = { b: 0, cx: 0, cy: 0, sx: 0, sy: 0, t: null }
+  const neutralPk = buildPacket(N)
+  assert.equal(neutralPk.length, 20); assert.equal(neutralPk.readUInt32LE(0), 0xfff); assert.equal(neutralPk.readUInt32LE(4), 0x2000000)
+  assert.equal(neutralPk.readUInt32LE(8), 0x7ff7ff); assert.equal(neutralPk.readUInt32LE(12), 0x80800081); assert.equal(neutralPk.readUInt32LE(16), 0)   // valores por defecto de Luma3DS
+  assert.equal(buildPacket({ ...N, b: 1 }).readUInt32LE(0), 0xffe); assert.equal(buildPacket({ ...N, b: 1 << 11 }).readUInt32LE(0), 0x7ff)   // A, Y
+  // Circle Pad a tope arriba-derecha: 0x800 ± 0x5D0
+  assert.equal(buildPacket({ ...N, cx: 1, cy: 1 }).readUInt32LE(8), ((0x800 + 0x5d0) << 12) | (0x800 + 0x5d0))
+  assert.equal(buildPacket({ ...N, cx: -1, cy: -1 }).readUInt32LE(8), ((0x800 - 0x5d0) << 12) | (0x800 - 0x5d0))
+  // Táctil: esquina y centro; sin tocar = 0x2000000
+  assert.equal(buildPacket({ ...N, t: [0, 0] }).readUInt32LE(4), (1 << 24) >>> 0); assert.equal(buildPacket({ ...N, t: [1, 1] }).readUInt32LE(4), ((1 << 24) | (0xfff << 12) | 0xfff) >>> 0)
+  assert.equal(buildPacket({ ...N, t: [0.5, 0.5] }).readUInt32LE(4), ((1 << 24) | (0x7ff << 12) | 0x7ff) >>> 0)
+  // ZR / ZL en los bits 9 y 10 de la palabra del C-Stick (referencia: irButtonsState << 8); C-Stick girado 45°
+  assert.equal(buildPacket({ ...N, b: 1 << 15 }).readUInt32LE(12) & 0x700, 0x200); assert.equal(buildPacket({ ...N, b: 1 << 14 }).readUInt32LE(12) & 0x700, 0x400)
+  assert.equal(buildPacket({ ...N, b: (1 << 14) | (1 << 15) }).readUInt32LE(12), (((0x80 << 24) | (0x80 << 16) | (0x600) | 0x81) >>> 0))
+  const cs = buildPacket({ ...N, sx: 1, sy: 0 }).readUInt32LE(12)
+  assert.equal((cs >>> 16) & 0xff, Math.floor(Math.SQRT1_2 * 0x7f + 0x80)); assert.equal((cs >>> 24) & 0xff, Math.floor(-Math.SQRT1_2 * 0x7f + 0x80)); assert.equal(cs & 0xff, 0x81)
   assert.equal(keyName('KeyA'), 'A'); assert.equal(keyName('Digit5'), 'Num5'); assert.equal(keyName('ArrowUp'), 'Up'); assert.equal(keyName('F5'), 'F5')
 
   // Puente local: configuración + descubrimiento UDP
@@ -41,6 +55,21 @@ const relay = require('../src/core/relay')
   const reply = await new Promise(res => { const s = dgram.createSocket('udp4'); s.on('message', m => { s.close(); res(String(m)) }); s.send('FORJA?', 18766, '127.0.0.1') })
   assert.match(reply, /^FORJA http:\/\/.+:18765$/)
   h.stop()
+  // Mando de extremo a extremo (PadSender → UDP): llega con el formato de Luma, se mantiene mientras haya pulsación y el
+  // vigilante suelta los botones si la web deja de reenviar
+  const { PadSender } = require('../src/core/pad')
+  const lumaSock = require('node:dgram').createSocket('udp4'); const pk = []
+  lumaSock.on('message', m => pk.push(Buffer.from(m))); await new Promise(r => lumaSock.bind(0, '127.0.0.1', r))
+  const ps = new PadSender()
+  ps.update('127.0.0.1', lumaSock.address().port, { b: 1 | (1 << 11), cx: 0, cy: 0, sx: 0, sy: 0, t: [0.5, 0.5] })   // A + Y + toque en el centro
+  await new Promise(r => setTimeout(r, 400))
+  assert.ok(pk.length >= 10, `se esperaban ~60 paquetes/s, llegaron ${pk.length}`); assert.equal(pk[0].length, 20)
+  assert.equal(pk[0].readUInt32LE(0), 0xfff & ~1 & ~(1 << 11)); assert.equal(pk[0].readUInt32LE(4), ((1 << 24) | (0x7ff << 12) | 0x7ff) >>> 0)
+  await new Promise(r => setTimeout(r, 2200))                 // la web no reenvía: el vigilante lo suelta todo
+  const tail = pk[pk.length - 1]; assert.equal(tail.readUInt32LE(0), 0xfff); assert.equal(tail.readUInt32LE(4), 0x2000000)
+  await new Promise(r => setTimeout(r, 500)); const n1 = pk.length; await new Promise(r => setTimeout(r, 300)); assert.equal(pk.length, n1)   // y deja de enviar
+  assert.equal(ps.lastError, ''); ps.close(); lumaSock.close()
+
   // Energía: comandos por sistema (no se ejecutan)
   const pw = require('../src/core/power')
   assert.deepEqual(pw.powerCommand('win32', 'lock'), ['rundll32.exe', ['user32.dll,LockWorkStation']])

@@ -39,8 +39,15 @@ Requisitos: la 3DS con **BootNTR** (idealmente [NTR-HR](https://github.com/xzn/n
 2. En *3DS → Jugar* pulsa **Ver**. La app de escritorio manda a NTR la orden de «remote play» (TCP 8000), recibe los fotogramas JPEG por UDP 8001, los recompone (las pantallas llegan giradas 90°) y los emite por WebRTC: verás la superior y, debajo, la inferior. **Tocar la inferior = pantalla táctil** de la 3DS.
 3. Si no hay imagen: NTR no está activo, PC y 3DS no comparten red, o el cortafuegos bloquea UDP 8001 (usa el botón de *Este equipo*). En NTR-HR (X+Y) también puedes poner la IP del PC y arrancar el remote play desde la propia 3DS.
 
-### Mando de la 3DS
-Los navegadores no pueden enviar UDP, así que los botones pasan por la **app de escritorio** del PC (misma WiFi): activa **Input Redirection** en Luma3DS (L+↓+Select → Rosalina → Input Redirection → Start). La IP sale sola de Forja3DS (o de la ficha). Desde la tablet (*3DS → Jugar*): botones, Circle Pad, C-Stick y táctil.
+### Mando de la 3DS (desde la web o la app de escritorio)
+Un navegador no puede enviar UDP, así que los botones salen por el **PC con la app de escritorio** (misma WiFi que la 3DS). Desde la tablet o cualquier navegador: *3DS → Jugar*.
+
+1. En la 3DS: **Luma3DS → L+↓+Select → Rosalina → Input Redirection → Start** (sin esto la consola ignora los botones).
+2. Abre la **app de escritorio** en un PC de la misma red.
+3. Forja necesita la **IP de la 3DS**: la informa Forja3DS sola; si no, el panel del mando te pide escribirla y la guarda.
+4. El panel muestra el estado: *sin PC* · *PC conectado pero sin IP* · *✔ enlazado a través de «MI-PC» → 192.168.1.50:4950*. **Probar** comprueba que el PC responde; si pulsas y el PC no confirma, avisa.
+
+Detalles técnicos (comprobados con el código de Luma3DS y su cliente de referencia): paquete UDP de 20 bytes al puerto 4950 con `hidPad` (activo a 0), táctil `(1<<24)|(y<<12)|x`, Circle Pad ±0x5D0 sobre 0x800, C-Stick girado 45° con ZR/ZL en los bits 9–10, y HOME en los botones de sistema. Se reenvía a 60 Hz mientras haya algo pulsado; si la web deja de dar señales 2 s, el PC suelta todo (así no se queda un botón atascado). Desde la web se envían como mucho ~25 mensajes/s con el último estado siempre garantizado, porque Realtime descarta lo que pase de su límite por segundo.
 
 ## Actualizaciones automáticas
 * **3DS**: al conectarse comprueba `/downloads/latest.json` de la web; si hay versión nueva descarga el `.3dsx` (si la abriste desde el Homebrew Launcher) o instala el `.cia` (si la tienes instalada) y avisa: «Reinicia la app para usarla».

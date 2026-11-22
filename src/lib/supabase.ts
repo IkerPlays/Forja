@@ -33,7 +33,7 @@ export const supabase: SupabaseClient | null =
   cfg.url && cfg.key
     ? createClient(cfg.url, cfg.key, {
         auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
-        realtime: { params: { eventsPerSecond: 30 } },
+        realtime: { params: { eventsPerSecond: 40 } },
       })
     : null
 

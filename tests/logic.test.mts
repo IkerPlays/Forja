@@ -39,4 +39,24 @@ assert.deepEqual(t.labels.map(l => [l.name, l.color]), [['Bug', '#ef4444'], ['',
 assert.deepEqual(t.skipped, { lists: 1, cards: 2 })
 assert.equal(parseTrello(trello, true).lists.length, 4)
 assert.throws(() => parseTrello({ foo: 1 }), /Trello/)
-console.log('✔ markdown y trello: todas las pruebas pasan')
+
+// --- Envío con tope de frecuencia (mando/ratón): nunca se pierde el último estado y se respeta el orden
+import { Coalescer } from '../src/lib/coalesce'
+{
+  const sent: number[] = []
+  const c = new Coalescer<number>(v => sent.push(v))
+  const t0 = Date.now()
+  for (let i = 1; i <= 100; i++) { c.push('pad', i, 40); await new Promise(r => setTimeout(r, 2)) }   // ~200 ms a 500 envíos/s
+  await new Promise(r => setTimeout(r, 120))
+  const elapsed = Date.now() - t0
+  assert.equal(sent[sent.length - 1], 100)                                        // el último estado SIEMPRE llega
+  assert.ok(sent.length <= Math.ceil(elapsed / 40) + 2, `demasiados envíos: ${sent.length} en ${elapsed} ms`)   // ≤ ~25/s
+  assert.ok(sent.every((v, i) => i === 0 || v > sent[i - 1]))                      // sin desorden
+  // dos claves independientes + flush: lo pendiente sale ya
+  const out: string[] = []
+  const c2 = new Coalescer<string>(v => out.push(v))
+  c2.push('move', 'm1', 1000); c2.push('move', 'm2', 1000)                         // m1 sale ya; m2 queda esperando
+  c2.push('other', 'o1', 1000)
+  assert.deepEqual(out, ['m1', 'o1']); c2.flush(); assert.deepEqual(out, ['m1', 'o1', 'm2']); c2.dispose()
+}
+console.log('✔ markdown, trello y envío con tope: todas las pruebas pasan')

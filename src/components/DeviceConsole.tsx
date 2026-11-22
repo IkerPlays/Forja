@@ -6,10 +6,10 @@ import PcFolderPanel from './PcFolderPanel'
 import { Link as RouterLink } from 'react-router-dom'
 import { isDesktop } from '../lib/native'
 import { useHostState } from './DesktopHostMount'
-import { CommandClient, Link } from '../lib/devices'
+import { CommandClient, Link, type Peer } from '../lib/devices'
 import { openP2P, type P2PClient } from '../lib/p2p'
 import type { Device, FileEntry } from '../lib/types'
-import type { PadState } from '../lib/pad'
+import { isNeutral, type PadState } from '../lib/pad'
 import FileBrowser from './FileBrowser'
 import Gamepad3DS from './Gamepad3DS'
 import ScreenView from './ScreenView'
@@ -41,16 +41,21 @@ export default function DeviceConsole({ device, onChanged, onDeleted, startPath,
   const needsLink = tab === 'play' || tab === 'screen' || (tab === 'files' && !is3ds)
   const [link, setLink] = useState<Link | null>(null)
   const [linkErr, setLinkErr] = useState<string | null>(null)
-  const [hasBridge, setHasBridge] = useState(false)
+  const [bridgePeer, setBridgePeer] = useState<Peer | null>(null)
+  const hasBridge = !!bridgePeer && !bridgePeer.meta?.noip   // sin IP de la 3DS el PC no puede enviarle el mando
+  const [ack, setAck] = useState<{ at: number; pc?: string; ip?: string; port?: number; sent?: number; err?: string } | null>(null)
+  const [pressedAt, setPressedAt] = useState(0)
+  const [, setNow] = useState(0)
   const [filesHost, setFilesHost] = useState<string | null>(null)
   const [p2p, setP2p] = useState<P2PClient | null>(null)
   useEffect(() => {
     if (!needsLink) return
     const l = new Link(device.id, 'viewer')
     setLinkErr(null)
-    const off = l.onPresence(peers => { setHasBridge(peers.some(p => p.roles.includes('bridge'))); setFilesHost(peers.find(p => p.roles.includes('files'))?.id ?? null) })
+    const off = l.onPresence(peers => { setBridgePeer(peers.find(p => p.roles.includes('bridge')) ?? null); setFilesHost(peers.find(p => p.roles.includes('files'))?.id ?? null) })
+    const offIn = l.onInput(m => { if (m?.k === 'pad-ack') setAck({ ...m, at: Date.now() }) })
     l.ready.then(() => setLink(l)).catch(e => setLinkErr(errMsg(e)))
-    return () => { off(); l.close(); setLink(null); setHasBridge(false); setFilesHost(null) }
+    return () => { off(); offIn(); l.close(); setLink(null); setBridgePeer(null); setAck(null); setFilesHost(null) }
   }, [device.id, needsLink])
 
   // Archivos directos con el PC (WebRTC): sin subir nada al servidor
@@ -61,19 +66,27 @@ export default function DeviceConsole({ device, onChanged, onDeleted, startPath,
     return () => { alive = false; client?.close(); setP2p(null) }
   }, [link, filesHost, tab])
 
-  // Mando → bridge (a ~60 Hz como máximo)
-  const lastSent = useRef(0)
-  const pending = useRef<PadState | null>(null)
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Mando → PC (como mucho ~25 mensajes/s: Realtime descarta el exceso). Mientras haya algo pulsado se reenvía cada 0,4 s
+  // para que el PC sepa que seguimos ahí (si no, suelta los botones solo).
   const lastPad = useRef<PadState>({ b: 0, cx: 0, cy: 0, sx: 0, sy: 0, t: null })
   const sendPad = useCallback((s: PadState) => {
     lastPad.current = s
-    if (!link) return
-    const flush = () => { timer.current = null; if (pending.current) { void link.input({ k: 'pad', s: pending.current }); pending.current = null; lastSent.current = performance.now() } }
-    pending.current = s
-    const wait = 16 - (performance.now() - lastSent.current)
-    if (wait <= 0) flush(); else if (!timer.current) timer.current = setTimeout(flush, wait)
+    if (!isNeutral(s)) setPressedAt(Date.now())
+    link?.inputCoalesced('pad', { k: 'pad', s }, 40)
   }, [link])
+  useEffect(() => {
+    if (!link || !hasBridge) return
+    const t = setInterval(() => { if (!isNeutral(lastPad.current)) link.inputCoalesced('pad', { k: 'pad', s: lastPad.current }, 40) }, 400)
+    return () => clearInterval(t)
+  }, [link, hasBridge])
+  useEffect(() => { if (!pressedAt) return; const t = setTimeout(() => setNow(Date.now()), 2200); return () => clearTimeout(t) }, [pressedAt])
+  async function testPad() {
+    if (!link) return
+    const before = Date.now()
+    void link.input({ k: 'pad-test' })
+    await new Promise(r => setTimeout(r, 2000))
+    setAck(a => { toast(a && a.at >= before ? 'El PC recibe el mando y lo está enviando a la 3DS' : 'El PC no responde. ¿Está abierta la app de escritorio?', a && a.at >= before ? 'ok' : 'err'); return a })
+  }
 
   const tabs: { id: Tab; label: string; icon: ReactNode }[] = [
     ...(is3ds ? [{ id: 'play' as Tab, label: 'Jugar', icon: <Gamepad2 size={16} /> }] : isLocal ? [] : [{ id: 'screen' as Tab, label: 'Pantalla y control', icon: <MonitorPlay size={16} /> }]),
@@ -136,12 +149,7 @@ export default function DeviceConsole({ device, onChanged, onDeleted, startPath,
                   </ol></details>
                 <ScreenView link={link} kind="3ds" onTouch3ds={hasBridge ? (t => sendPad({ ...lastPad.current, t })) : undefined} />
                 <div>
-                  {!hasBridge && (
-                    <div className="callout">
-                      <strong>El mando necesita la app de escritorio.</strong> Un navegador no puede enviar los botones a la 3DS por tu WiFi (usa UDP).
-                      Abre <strong>Forja para escritorio</strong> en un PC de tu red y pon la IP de la 3DS en su ficha (<RouterLink to="/connect">guía</RouterLink>).
-                    </div>
-                  )}
+                  <PadStatus bridge={bridgePeer} ack={ack} pressedAt={pressedAt} onTest={testPad} device={device} onSaved={onChanged} />
                   <div className={hasBridge ? '' : 'pad-off'}><Gamepad3DS onChange={sendPad} /></div>
                 </div>
               </>
@@ -232,5 +240,58 @@ function AgentHelp({ device, onClose }: { device: Device; onClose: () => void })
         <p className="muted small">ID del dispositivo: <code>{device.id}</code></p>
       </div>
     </Modal>
+  )
+}
+
+/** Estado del mando de la 3DS: qué falta y a dónde se está enviando. */
+function PadStatus({ bridge, ack, pressedAt, onTest, device, onSaved }: {
+  bridge: Peer | null; ack: { at: number; pc?: string; ip?: string; port?: number; sent?: number; err?: string } | null
+  pressedAt: number; onTest: () => void; device: Device; onSaved: () => void
+}) {
+  const toast = useToast()
+  const [ip, setIp] = useState('')
+  const [busy, setBusy] = useState(false)
+  const valid = /^(\d{1,3}\.){3}\d{1,3}$/.test(ip.trim())
+
+  if (!bridge) {
+    return (
+      <div className="callout">
+        <strong>El mando necesita la app de escritorio.</strong> Un navegador no puede enviar los botones a la 3DS por tu WiFi (usa UDP, que solo
+        pueden mandar programas de escritorio). Abre <strong>Forja para escritorio</strong> en un PC de la misma WiFi: aparecerá aquí al instante
+        (<RouterLink to="/connect">guía</RouterLink>).
+      </div>
+    )
+  }
+  if (bridge.meta?.noip) {
+    return (
+      <div className="callout">
+        <strong>{String(bridge.meta.pc || 'El PC')} está conectado, pero no conoce la IP de tu 3DS.</strong>
+        <p className="small muted">La ves en la 3DS: Ajustes → Internet → Ajustes de conexión (o la muestra Forja3DS). Se guarda en la ficha y vale para siempre.</p>
+        <form className="inline-form wrap" onSubmit={async e => {
+          e.preventDefault(); setBusy(true)
+          const { error } = await sb().from('devices').update({ config: { ...(device.config as object), ip: ip.trim() } }).eq('id', device.id)
+          setBusy(false)
+          if (error) return toast(errMsg(error), 'err')
+          toast('IP guardada: enlazando…'); onSaved()
+        }}>
+          <input value={ip} onChange={e => setIp(e.target.value)} placeholder="192.168.1.50" inputMode="decimal" autoComplete="off" />
+          <button className="btn primary" disabled={!valid || busy}>Guardar IP</button>
+        </form>
+      </div>
+    )
+  }
+  const target = String(bridge.meta?.ip ?? '') + ':' + String(bridge.meta?.port ?? 4950)
+  const silent = pressedAt && (!ack || ack.at < pressedAt) && Date.now() - pressedAt > 2000
+  return (
+    <div className={`callout ${silent || ack?.err ? 'error' : ''}`}>
+      <div className="row wrap">
+        <span>{silent || ack?.err ? '⚠' : '✔'} Mando enlazado a través de <strong>{String(bridge.meta?.pc || 'tu PC')}</strong> → <code>{target}</code></span>
+        <div className="spacer" />
+        <button className="btn sm" onClick={onTest}>Probar</button>
+      </div>
+      {ack?.err && <p className="small">El PC no puede enviar a esa IP: {ack.err}. Revisa la IP y que estéis en la misma red.</p>}
+      {silent && !ack?.err && <p className="small">Tus pulsaciones no llegan al PC. Mira que la app de escritorio siga abierta.</p>}
+      <p className="small muted">En la 3DS: <strong>Luma3DS → L+↓+Select → Rosalina → Input Redirection → Start</strong>. Sin eso la consola ignora los botones.</p>
+    </div>
   )
 }

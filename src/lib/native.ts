@@ -22,6 +22,7 @@ export interface ForjaDesktop {
   }
   relayStatus(): Promise<{ on: boolean; addresses: string[]; requests: number; error?: string }>
   openFirewall(): Promise<boolean>
+  padStatus(): Promise<{ sent: number; error: string }>
   power(action: 'lock' | 'sleep' | 'restart' | 'shutdown'): Promise<void>
   ntrStart(ip: string, opts?: { quality?: number; topPriority?: boolean; priority?: number; qos?: number }): Promise<{ accepted: boolean; frames: number }>
   ntrStatus(): Promise<{ on: boolean; frames: number; lastFrameAgoMs: number | null }>
